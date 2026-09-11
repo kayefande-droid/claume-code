@@ -149,16 +149,25 @@ def cmd_provider(args: List[str]) -> None:
 
 
 def cmd_proxy() -> None:
-    state = config.load_proxy_state()
-    if state:
-        print(f"{GREEN}✔ proxy already running at {state['base_url']}{RESET}")
+    if proxy.is_running():
+        cfg = config.Config()
+        base = f"http://{cfg.get('proxy_host', '127.0.0.1')}:{cfg.get('proxy_port', 8000)}/v1"
+        print(f"{GREEN}✔ proxy is live at {base}{RESET}")
         return
+    config.clear_proxy_state()  # drop stale state from dead runs
+    if not proxy.collect_keys():
+        print(f"{GOLD}⚠ no NVIDIA key — prompting now (free from build.nvidia.com){RESET}")
+        key = proxy.prompt_for_nvidia_key()
+        if not key:
+            print(f"{RED}✗ cannot start proxy without a key{RESET}")
+            return
     print(f"{GREY}starting free-claume proxy…{RESET}")
     try:
         proxy.start_server()
-        state = config.load_proxy_state()
-        print(f"{GREEN}✔ free-claume proxy → {state['base_url']}{RESET}")
-        print(f"{GREY}  provider is 'nvidia' → the agent talks to this proxy{RESET}")
+        cfg = config.Config()
+        base = f"http://{cfg.get('proxy_host', '127.0.0.1')}:{cfg.get('proxy_port', 8000)}/v1"
+        print(f"{GREEN}✔ free-claume proxy → {base}{RESET}")
+        print(f"{GREY}  tip: run {MINT}claume proxy{GREY} in a separate terminal to keep it alive after exiting claume{RESET}")
     except Exception as exc:
         print(f"{RED}✗ proxy failed: {exc}{RESET}")
 
@@ -310,10 +319,11 @@ def cmd_doctor() -> None:
     row("git", shutil.which("git") is not None, shutil.which("git") or "not found")
     keys = proxy.collect_keys()
     row("nvidia key", bool(keys), f"{len(keys)} key(s) in vault/env")
-    from . import llm
 
-    row("proxy", proxy.is_running() or config.load_proxy_state() is not None,
-        config.load_proxy_state()["base_url"] if config.load_proxy_state() else "not started")
+    live = proxy.is_running()
+    state = config.load_proxy_state()
+    row("proxy", live,
+        state.get("base_url", "") if live else "not running — run 'claume proxy' or /proxy")
     sdir = config.skills_dir()
     row("skills", sdir.exists(), str(sdir))
     row("vault", config.claume_dir().exists(), str(config.claume_dir()))

@@ -31,16 +31,38 @@ def _first_run_setup() -> None:
         print(f"{GREY}  then run /key NVIDIA_API_KEY or /proxy{RESET}\n")
 
 
+def _ensure_nvidia_key_interactive() -> None:
+    """Demand the NVIDIA key whenever we have none — not only on first run."""
+    cfg = config.Config()
+    if cfg.get("provider") != "nvidia":
+        return
+    if proxy.collect_keys():
+        return
+    try:
+        if not sys.stdin.isatty():
+            return  # piped/non-interactive: never block
+    except Exception:
+        return
+    proxy.prompt_for_nvidia_key()
+
+
 def _start_proxy_if_needed() -> None:
     """Start the in-process proxy when provider is nvidia.
 
-    Never prompts for a key here — first-run setup already asked; if the
-    user skipped it, /proxy or /key can be used later.
+    Uses a LIVE health probe — a leftover proxy.json from a crashed run
+    must not make us print a phantom proxy URL. Piped/non-interactive
+    runs never spawn the server (that's what `claume proxy` is for).
     """
     cfg = config.Config()
     if cfg.get("provider") != "nvidia":
         return
-    if config.load_proxy_state():
+    if proxy.is_running():
+        return
+    config.clear_proxy_state()  # drop stale state from dead runs
+    try:
+        if not sys.stdin.isatty():
+            return
+    except Exception:
         return
     try:
         proxy.start_server()
@@ -51,6 +73,10 @@ def _start_proxy_if_needed() -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
+    # Subcommand: claume proxy [--verbose]  ->  foreground proxy server
+    if argv and argv[0] == "proxy":
+        return proxy.serve_foreground(verbose="--verbose" in argv)
+
     # Flags
     fast = "--fast" in argv or "-f" in argv
     quiet = "--quiet" in argv or "-q" in argv
@@ -58,7 +84,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"claume-code v{__version__}")
         return 0
     if "--help" in argv or "-h" in argv:
-        print("usage: claume [--fast|--quiet|--version]")
+        print("usage: claume [proxy] [--fast|--quiet|--version]")
+        print("  claume           start the interactive agent")
+        print("  claume proxy     run the free-claume proxy in the foreground")
         return 0
 
     workspace = Path.cwd()
@@ -67,14 +95,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     ui.show_banner(__version__, fast=fast)
 
     _first_run_setup()
+    _ensure_nvidia_key_interactive()
     _start_proxy_if_needed()
 
-    # Context line
-    state = config.load_proxy_state()
-    if state and config.Config().get("provider") == "nvidia":
-        print(f"{GREY}  proxy {RESET}{MINT}{state['base_url']}{RESET} {GREY}· model{RESET} {MINT}{config.Config().model}{RESET}")
+    # Context line — proxy status is a LIVE probe, never a stale file
+    cfg = config.Config()
+    if cfg.get("provider") == "nvidia":
+        base = f"http://{cfg.get('proxy_host', '127.0.0.1')}:{cfg.get('proxy_port', 8000)}/v1"
+        if proxy.is_running():
+            print(f"{GREY}  proxy{RESET} {MINT}{base}{RESET} {GREEN}live{RESET} {GREY}· model{RESET} {MINT}{cfg.model}{RESET}")
+        else:
+            print(f"{GREY}  proxy{RESET} {GREY}not running — open another terminal and run:{RESET} {MINT}claume proxy{RESET}")
+        print(f"{GREY}  model{RESET} {MINT}{cfg.model}{RESET}")
     else:
-        print(f"{GREY}  provider{RESET} {MINT}{config.Config().get('provider')}{RESET} {GREY}· model{RESET} {MINT}{config.Config().model}{RESET}")
+        print(f"{GREY}  provider{RESET} {MINT}{cfg.get('provider')}{RESET} {GREY}· model{RESET} {MINT}{cfg.model}{RESET}")
     print(f"{GREY}  workspace{RESET} {MINT}{workspace}{RESET}")
     print(f"{GREY}  /help for commands · ctrl+c to interrupt · /exit to quit{RESET}\n")
 

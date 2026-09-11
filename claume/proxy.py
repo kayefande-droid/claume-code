@@ -22,6 +22,7 @@ Run standalone with ``python -m claume.proxy``.
 from __future__ import annotations
 
 import json
+import os
 import ssl
 import sys
 import threading
@@ -346,7 +347,7 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None, verbose
     host = host or cfg.get("proxy_host", "127.0.0.1")
     port = int(port or cfg.get("proxy_port", 8000))
 
-    ProxyHandler.state["keys"] = ensure_keys()
+    ProxyHandler.state["keys"] = collect_keys()
     ProxyHandler.state["verbose"] = verbose
 
     _server = ThreadingHTTPServer((host, port), ProxyHandler)
@@ -358,7 +359,7 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None, verbose
         {
             "host": host,
             "port": port,
-            "pid": None,
+            "pid": os.getpid(),
             "base_url": f"http://{host}:{port}/v1",
             "started_at": time.time(),
             "models": ProxyHandler.state["model_pool"][:5],
@@ -376,20 +377,39 @@ def stop_server() -> None:
 
 
 def is_running() -> bool:
-    state = config.load_proxy_state()
-    return state is not None
-
-
-if __name__ == "__main__":
-    import sys
-
-    srv = start_server(verbose="--verbose" in sys.argv)
+    """Probe the /health endpoint for a LIVE proxy (state file can be stale)."""
+    state = config.load_proxy_state() or {}
     cfg = config.Config()
-    print(f"\033[38;5;46m✦ free-claume proxy listening on http://{cfg.get('proxy_host')}:{cfg.get('proxy_port')}/v1\033[0m")
-    print("  Press Ctrl+C to stop.")
+    host = state.get("host") or cfg.get("proxy_host", "127.0.0.1")
+    port = state.get("port") or cfg.get("proxy_port", 8000)
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/health", timeout=1.5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def serve_foreground(verbose: bool = False) -> int:
+    """Run the proxy in the foreground until Ctrl+C (used by `claume proxy`)."""
+    start_server(verbose=verbose)
+    cfg = config.Config()
+    nkeys = len(ProxyHandler.state["keys"])
+    print(f"{GREEN}✦ free-claume proxy{RESET}  http://{cfg.get('proxy_host')}:{cfg.get('proxy_port')}/v1")
+    print(f"{GREY}  upstream:{RESET} {NVIDIA_BASE}  {GREY}· keys loaded:{RESET} {nkeys}")
+    print(f"{GREY}  any OpenAI SDK can point here. Press Ctrl+C to stop.{RESET}")
     try:
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
         stop_server()
         print("proxy stopped.")
+        return 0
+
+
+GREEN = "\033[38;5;46m"
+GREY = "\033[38;5;245m"
+RESET = "\033[0m"
+
+
+if __name__ == "__main__":
+    sys.exit(serve_foreground(verbose="--verbose" in sys.argv))

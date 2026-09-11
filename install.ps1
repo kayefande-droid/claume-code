@@ -55,18 +55,27 @@ if (-not $PythonCmd) {
 Write-Host "* found $ver" -ForegroundColor Gray
 
 # ---------------------------------------------------------------- copy app
-$SrcRoot = $PSScriptRoot
-$sourceApp = Join-Path $SrcRoot "claume"
-if (-not (Test-Path $sourceApp)) {
-    # running via irm|iex: download the zip instead
+# IMPORTANT: when run via 'irm ... | iex' there is NO script file, so
+# $PSScriptRoot is an empty string and Join-Path would throw
+# "Cannot bind argument to parameter 'Path' because it is an empty string".
+# Guard it, and fall back to downloading the repo zip.
+$SrcRoot = $null
+if ($PSScriptRoot) { $SrcRoot = $PSScriptRoot }
+
+$sourceApp = $null
+if ($SrcRoot -and (Test-Path (Join-Path $SrcRoot "claume"))) {
+    $sourceApp = Join-Path $SrcRoot "claume"
+} else {
     Write-Host "* fetching claume-code from GitHub..." -ForegroundColor Cyan
     $zip = Join-Path $env:TEMP "claume-code.zip"
     Invoke-WebRequest -Uri "https://github.com/kayefande-droid/claume-code/archive/refs/heads/main.zip" -OutFile $zip
-    Expand-Archive -Path $zip -DestinationPath $env:TEMP -Force
-    $SrcRoot = Join-Path $env:TEMP "claume-code-main"
+    $extractRoot = Join-Path $env:TEMP "claume-code-extract"
+    if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }
+    Expand-Archive -Path $zip -DestinationPath $extractRoot -Force
+    $SrcRoot = Join-Path $extractRoot "claume-code-main"
     $sourceApp = Join-Path $SrcRoot "claume"
 }
-if (-not (Test-Path $sourceApp)) {
+if (-not $sourceApp -or -not (Test-Path $sourceApp)) {
     Write-Host "X could not locate the 'claume' package (looked in $SrcRoot)." -ForegroundColor Red
     exit 1
 }
