@@ -151,9 +151,20 @@ claume-code/
 
 ## Running the proxy standalone
 
+The proxy is its own terminal command, linked to your claume install:
+
 ```powershell
-python -m claume.proxy            # serves http://127.0.0.1:8000/v1
-# in another terminal — it's just OpenAI:
+claume proxy                      # serves http://127.0.0.1:8000/v1 (Ctrl+C to stop)
+claume proxy --verbose            # with request logging
+```
+
+The claume REPL auto-connects to it while it's running (the status line
+shows `live`). If it's not running, the REPL tells you — or just run
+`/proxy` inside claume to start it in-process.
+
+It's also plain OpenAI on the wire, so any SDK works:
+
+```powershell
 curl http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" `
   -d '{\"model\":\"meta/llama-3.3-70b-instruct\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'
 ```
