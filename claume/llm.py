@@ -46,6 +46,35 @@ class LLMError(Exception):
     pass
 
 
+def _friendly_http_error(code: int, detail: str) -> str:
+    """Turn nested provider JSON blobs into one clear sentence."""
+    short = detail[:300]
+    try:
+        obj = json.loads(detail)
+        msg = obj.get("error", {}).get("message", "") if isinstance(obj, dict) else ""
+        if isinstance(msg, str) and msg:
+            # The proxy wraps upstream JSON inside 'message' — unwrap once more.
+            try:
+                inner = json.loads(msg)
+                msg = inner.get("detail") or inner.get("title") or msg
+            except Exception:
+                pass
+            short = msg[:300]
+    except Exception:
+        pass
+    low = short.lower()
+    if code == 410 or "end of life" in low or "no longer available" in low:
+        return (
+            f"model retired by NVIDIA (410 Gone): {short} — "
+            "run /model to pick another, or set fallbacks in the proxy admin UI"
+        )
+    if code == 401:
+        return f"invalid API key (401): {short} — run /key NVIDIA_API_KEY or set it in the admin UI"
+    if code == 429:
+        return f"rate limited (429): {short} — add another key (NVIDIA_API_KEY_2) or retry"
+    return f"LLM HTTP {code}: {short}"
+
+
 def endpoint_for(provider: str) -> str:
     cfg = config.Config()
     custom = cfg.get(f"providers.{provider}.base_url")
@@ -115,8 +144,8 @@ def stream_chat(
     try:
         resp = urllib.request.urlopen(req, timeout=300, context=_SSL_CTX)
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:500]
-        raise LLMError(f"LLM HTTP {exc.code}: {detail}") from exc
+        detail = exc.read().decode("utf-8", "replace")
+        raise LLMError(_friendly_http_error(exc.code, detail)) from exc
     except urllib.error.URLError as exc:
         raise LLMError(
             f"cannot reach LLM endpoint {endpoint} — is the free-claume proxy running? ({exc})"

@@ -14,9 +14,13 @@ builds full projects from natural-language prompts — inspired by Claude Code a
 Freebuff, powered **free** by NVIDIA NIM through the built-in **free-claume proxy**.
 
 > 🎬 Pixel banner animations · 🧠 ReAct agentic loop · 🛠 17 built-in tools
-> 🌐 free-claume proxy (OpenAI-compatible) · 🔐 local key vault ("live space")
+> 🌐 free-claume proxy (OpenAI-compatible) · 🖥 admin UI at `/admin` · 🔐 local key vault
 > 🧩 MCP server support · 📚 skills from GitHub · ⚡ auto mode + effort levels
 > 🌍 multi-language (Python/JS/TS/Go/Rust/Java/C#/C++…) · 🔁 self-update
+
+Default model: **`nvidia/nemotron-3-super-120b-a12b`** (FCC-style), with an
+ordered **fallback chain** — if a model is retired (410) or rate-limited, the
+proxy transparently retries the next one and your turn survives.
 
 ---
 
@@ -64,7 +68,7 @@ claume
 ❯ clone https://github.com/pallets/flask and explain its structure
 ❯ fix the failing test in tests/ and make pytest pass
 ❯ create a REST API with fastapi + sqlite with tests
-❯ /proxy-ui        ← luxurious browser dashboard for the proxy
+❯ /proxy-ui        ← admin UI in your browser: paste key, pick model, Apply
 ❯ /auto on         ← fewer confirmations (destructive still asks)
 ❯ /effort deep     ← harder thinking for tricky bugs
 ```
@@ -186,6 +190,7 @@ Pulls the latest code via git (or re-run the installer one-liner).
 | `claume` not found after install | open a **new** PowerShell tab (PATH refresh) |
 | `cannot reach LLM endpoint` | run `/proxy`, check `/doctor` |
 | `401` from NVIDIA | key invalid — `/key NVIDIA_API_KEY` to re-set |
+| `410` model retired | claume auto-migrates EOL models; also set fallbacks in `/proxy-ui` (admin UI → Fallback models) |
 | Rate limited | add more keys: `/key NVIDIA_API_KEY_2` (auto-rotates) |
 | Weird characters | use Windows Terminal (better glyph support) |
 

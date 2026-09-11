@@ -13,6 +13,11 @@ from typing import Any, Dict, Optional
 
 APP_DIR_NAME = ".claume"
 
+# NVIDIA NIM models confirmed gone (410 Gone - end of life).
+DEAD_MODELS = {
+    "meta/llama-3.3-70b-instruct",   # EOL 2026-08-26
+}
+
 # Deliberately kept out of any cloud sync folder; USERS/admin style layout.
 def home_dir() -> Path:
     return Path(os.environ.get("USERPROFILE") or Path.home())
@@ -59,7 +64,8 @@ class Config:
 
     DEFAULTS: Dict[str, Any] = {
         "provider": "nvidia",
-        "model": "meta/llama-3.3-70b-instruct",
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "model_fallbacks": [],
         "effort": "balanced",
         "auto_mode": False,
         "classifier_enabled": True,
@@ -95,6 +101,13 @@ class Config:
         # Merge defaults for forward compatibility.
         for key, value in self.DEFAULTS.items():
             self._data.setdefault(key, value)
+        # One-way migration: NVIDIA has retired these models (HTTP 410 EOL).
+        if self._data.get("model") in DEAD_MODELS:
+            self._data["model"] = self.DEFAULTS["model"]
+            try:
+                self.save()
+            except Exception:
+                pass
 
     def save(self) -> None:
         claume_dir().mkdir(parents=True, exist_ok=True)

@@ -33,16 +33,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import config, keyvault
+from .proxy_ui import ADMIN_HTML
 
 NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
 MODELS_URL = f"{NVIDIA_BASE}/models"
 
-# Roughly ordered by capability for coding work.
+# Current (2026) free NIM pool - ordered by coding capability.
+# meta/llama-3.3-70b-instruct went EOL on 2026-08-26; see config.DEAD_MODELS.
 DEFAULT_MODEL_POOL = [
-    "meta/llama-3.3-70b-instruct",
-    "meta/llama-3.1-405b-instruct",
-    "qwen/qwen2.5-coder-32b-instruct",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3-coder-480b-a35b-instruct",
     "deepseek-ai/deepseek-r1",
+    "meta/llama-3.1-405b-instruct",
 ]
 
 _SSL_CTX = ssl.create_default_context()
@@ -248,13 +251,138 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/models":
             self._handle_models()
             return
+        if self.path == "/admin":
+            self._handle_admin_page()
+            return
+        if self.path == "/admin/data":
+            self._handle_admin_data()
+            return
         self._json(404, {"error": {"message": f"unknown path {self.path}"}})
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/v1/chat/completions":
             self._handle_chat()
             return
+        if self.path == "/admin/apply":
+            self._handle_admin_apply()
+            return
+        if self.path == "/admin/verify":
+            self._handle_admin_verify()
+            return
         self._json(404, {"error": {"message": f"unknown path {self.path}"}})
+
+    def _read_json_body(self) -> Dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            obj = json.loads(raw.decode("utf-8"))
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+
+    # -- admin UI -----------------------------------------------------
+    def _handle_admin_page(self) -> None:
+        data = ADMIN_HTML.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_admin_data(self) -> None:
+        cfg = config.Config()
+        keys = ProxyHandler.state["keys"]
+        masked = ""
+        if keys:
+            k = keys[0]
+            masked = (k[:9] + "…" + k[-4:]) if len(k) > 16 else "•••"
+        models: List[str] = list(ProxyHandler.state["model_pool"])
+        if keys:
+            try:
+                live = [m.get("id", "") for m in _list_models(keys[0])]
+                if live:
+                    models = live
+            except Exception:
+                pass
+        self._json(
+            200,
+            {
+                "has_key": bool(keys),
+                "key_masked": masked,
+                "model": cfg.model,
+                "fallbacks": cfg.get("model_fallbacks", []) or [],
+                "models": (models[:80] or list(DEFAULT_MODEL_POOL)),
+                "stats": {
+                    "requests": ProxyHandler.state["requests"],
+                    "errors": ProxyHandler.state["errors"],
+                    "keys": len(keys),
+                },
+                "base_url": (
+                    f"http://{cfg.get('proxy_host', '127.0.0.1')}:"
+                    f"{cfg.get('proxy_port', 8000)}/v1"
+                ),
+            },
+        )
+
+    def _handle_admin_apply(self) -> None:
+        body = self._read_json_body()
+        cfg = config.Config()
+        changed: List[str] = []
+
+        key = str(body.get("api_key") or "").strip()
+        if key:
+            if not key.startswith("nvapi-"):
+                self._json(400, {"ok": False, "error": "key must start with nvapi-"})
+                return
+            keyvault.set_key("NVIDIA_API_KEY", key)
+            cfg.set("key_vault.NVIDIA_API_KEY", True)
+            self._refresh_keys()
+            changed.append("api_key")
+
+        model = str(body.get("model") or "").strip()
+        if model:
+            cfg.set("model", model)
+            changed.append("model")
+
+        if isinstance(body.get("fallbacks"), list):
+            fb = [str(m).strip() for m in body["fallbacks"] if str(m).strip()]
+            cfg.set("model_fallbacks", fb)
+            changed.append("fallbacks")
+
+        self._json(
+            200,
+            {
+                "ok": True,
+                "changed": changed,
+                "has_key": bool(ProxyHandler.state["keys"]),
+                "model": cfg.model,
+            },
+        )
+
+    def _handle_admin_verify(self) -> None:
+        keys = ProxyHandler.state["keys"]
+        if not keys:
+            self._json(200, {"ok": False, "error": "no API key saved yet"})
+            return
+        body = self._read_json_body()
+        model = str(body.get("model") or config.Config().model)
+        probe = {
+            "model": model,
+            "messages": [{"role": "user", "content": "Reply with the single word: pong"}],
+            "max_tokens": 8,
+            "temperature": 0,
+            "stream": False,
+        }
+        try:
+            _status, resp = _post_chat(probe, keys[0], timeout=45)
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+            text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            self._json(200, {"ok": True, "model": model, "reply": (text or "").strip()[:80]})
+        except UpstreamError as exc:
+            self._json(
+                200,
+                {"ok": False, "model": model, "status": exc.status, "error": exc.args[0][:300]},
+            )
 
     def _handle_models(self) -> None:
         self._refresh_keys()
@@ -277,41 +405,56 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": {"message": "invalid JSON body"}})
             return
 
-        payload.setdefault("model", config.Config().model)
+        cfg = config.Config()
+        payload.setdefault("model", cfg.model)
         wants_stream = bool(payload.get("stream"))
 
         self._refresh_keys()
         ProxyHandler.state["requests"] += 1
 
-        attempts = 0
+        # FCC-style fallback chain: requested model first, then the
+        # configured fallbacks - so a dead (410/404) model never kills a
+        # turn. We rewrite the model field per candidate and stream the
+        # actual serving model back via the X-Claume-Model header.
+        candidates: List[str] = [str(payload["model"])]
+        for fb in cfg.get("model_fallbacks", []) or []:
+            if fb and fb not in candidates:
+                candidates.append(str(fb))
+        for pool_model in DEFAULT_MODEL_POOL:
+            if pool_model not in candidates and len(candidates) < 3:
+                candidates.append(pool_model)
+        candidates = [m for m in candidates if m not in config.DEAD_MODELS][:3]
+
         last_err: Optional[UpstreamError] = None
-        while attempts < 4:
-            attempts += 1
-            key = self._next_key()
-            try:
-                if wants_stream:
-                    self._stream_response(dict(payload), key)
-                else:
-                    status, resp = _post_chat(dict(payload), key)
-                    data = resp.read()
-                    self.send_response(status)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                return
-            except UpstreamError as exc:
-                last_err = exc
-                ProxyHandler.state["errors"] += 1
-                ProxyHandler.state["last_error"] = str(exc)[:200]
-                if exc.status in (401, 403, 429):
-                    self._rotate_key(key)
-                    time.sleep(min(2.0 * attempts, 6.0))
-                    continue
-                if exc.status >= 500:
-                    time.sleep(min(2.0 * attempts, 6.0))
-                    continue
-                break
+        for model in candidates:
+            payload["model"] = model
+            for attempt in range(1, 4):
+                key = self._next_key()
+                try:
+                    if wants_stream:
+                        self._stream_response(dict(payload), key)
+                    else:
+                        status, resp = _post_chat(dict(payload), key)
+                        data = resp.read()
+                        self.send_response(status)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("X-Claume-Model", model)
+                        self.send_header("Content-Length", str(len(data)))
+                        self.end_headers()
+                        self.wfile.write(data)
+                    return
+                except UpstreamError as exc:
+                    last_err = exc
+                    ProxyHandler.state["errors"] += 1
+                    ProxyHandler.state["last_error"] = f"{model}: {str(exc)[:180]}"
+                    if exc.status in (401, 403, 429):
+                        self._rotate_key(key)
+                        time.sleep(min(1.5 * attempt, 5.0))
+                        continue
+                    if exc.status >= 500:
+                        time.sleep(min(1.5 * attempt, 5.0))
+                        continue
+                    break  # 4xx (410/404/400 model errors) -> next fallback
 
         status = last_err.status if last_err else 502
         message = last_err.args[0] if last_err else "unknown proxy failure"
@@ -341,17 +484,38 @@ class ProxyHandler(BaseHTTPRequestHandler):
 _server: Optional[ThreadingHTTPServer] = None
 
 
-def start_server(host: Optional[str] = None, port: Optional[int] = None, verbose: bool = False) -> ThreadingHTTPServer:
+class _ProxyServer(ThreadingHTTPServer):
+    """HTTPServer subclass that refuses silent double-binding.
+
+    Default HTTPServer sets allow_reuse_address=1, which on Windows lets a
+    second process bind an already-served port - stale 'zombie' proxies
+    then shadow fresh code. We disable that explicitly.
+    """
+
+    allow_reuse_address = False
+    daemon_threads = True
+
+
+def start_server(host: Optional[str] = None, port: Optional[int] = None, verbose: bool = False) -> Optional[ThreadingHTTPServer]:
     global _server
     cfg = config.Config()
     host = host or cfg.get("proxy_host", "127.0.0.1")
     port = int(port or cfg.get("proxy_port", 8000))
 
+    # A healthy proxy already owns this port -> do not start a duplicate.
+    if is_running():
+        return None
+
     ProxyHandler.state["keys"] = collect_keys()
     ProxyHandler.state["verbose"] = verbose
 
-    _server = ThreadingHTTPServer((host, port), ProxyHandler)
-    _server.daemon_threads = True
+    try:
+        _server = _ProxyServer((host, port), ProxyHandler)
+    except OSError:
+        raise RuntimeError(
+            f"port {port} is occupied by a non-claume process. "
+            f"Free it or change proxy_port in the config, then retry."
+        ) from None
     thread = threading.Thread(target=_server.serve_forever, daemon=True)
     thread.start()
 
@@ -391,11 +555,26 @@ def is_running() -> bool:
 
 def serve_foreground(verbose: bool = False) -> int:
     """Run the proxy in the foreground until Ctrl+C (used by `claume proxy`)."""
-    start_server(verbose=verbose)
+    if is_running():
+        cfg = config.Config()
+        print(
+            f"{GREEN}✦ free-claume proxy is already live{RESET}  "
+            f"http://{cfg.get('proxy_host')}:{cfg.get('proxy_port')}/v1"
+        )
+        print(f"{GREY}  (another terminal is serving it — Ctrl+C here to exit){RESET}")
+        return 0
+    try:
+        started = start_server(verbose=verbose)
+    except RuntimeError as exc:
+        print(f"{RED}✗ {exc}{RESET}")
+        return 1
+    if started is None:  # lost a start race; someone else is serving now
+        return 0
     cfg = config.Config()
     nkeys = len(ProxyHandler.state["keys"])
     print(f"{GREEN}✦ free-claume proxy{RESET}  http://{cfg.get('proxy_host')}:{cfg.get('proxy_port')}/v1")
     print(f"{GREY}  upstream:{RESET} {NVIDIA_BASE}  {GREY}· keys loaded:{RESET} {nkeys}")
+    print(f"{GREY}  admin UI:{RESET} http://{cfg.get('proxy_host')}:{cfg.get('proxy_port')}/admin")
     print(f"{GREY}  any OpenAI SDK can point here. Press Ctrl+C to stop.{RESET}")
     try:
         while True:

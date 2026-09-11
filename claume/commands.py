@@ -173,10 +173,23 @@ def cmd_proxy() -> None:
 
 
 def cmd_proxy_ui() -> None:
-    """Serve the dashboard and open it."""
-    from .proxy_ui import serve_and_open
+    """Open the proxy Admin UI (key + model picker) in the browser."""
+    import webbrowser
 
-    serve_and_open()
+    cfg = config.Config()
+    base = f"http://{cfg.get('proxy_host', '127.0.0.1')}:{cfg.get('proxy_port', 8000)}"
+    if not proxy.is_running():
+        config.clear_proxy_state()
+        if not proxy.collect_keys():
+            print(f"{GOLD}⚠ no NVIDIA key yet — paste it in the admin UI that just opened{RESET}")
+        try:
+            proxy.start_server()
+        except Exception as exc:
+            print(f"{RED}✗ proxy failed to start: {exc}{RESET}")
+            return
+    url = f"{base}/admin"
+    print(f"{GREEN}✦ admin UI → {url}{RESET}")
+    webbrowser.open(url)
 
 
 # ---------------------------------------------------------------------------
@@ -354,14 +367,15 @@ def cmd_update() -> None:
 def cmd_recommend() -> None:
     print(f"{GREEN}recommended models (free, via NVIDIA NIM){RESET}")
     recs = [
-        ("meta/llama-3.3-70b-instruct", "best all-round coder; fast on NVIDIA's infra"),
-        ("meta/llama-3.1-405b-instruct", "deepest reasoning; slower, use effort=deep"),
-        ("qwen/qwen2.5-coder-32b-instruct", "specialized for code edits & diffs"),
+        ("nvidia/nemotron-3-super-120b-a12b", "current best default; fast + tool-capable"),
+        ("openai/gpt-oss-120b", "strong reasoning; great at code review"),
+        ("qwen/qwen3-coder-480b-a35b-instruct", "code-edit specialist (480B MoE)"),
         ("deepseek-ai/deepseek-r1", "chain-of-thought monster for hard bugs"),
+        ("meta/llama-3.1-405b-instruct", "deep generalist; slower, use effort=deep"),
     ]
     for model, why in recs:
-        print(f"  {MINT}{model:<38}{RESET} {GREY}{why}{RESET}")
-    print(f"{GREY}set with: /model <name>{RESET}")
+        print(f"  {MINT}{model:<42}{RESET} {GREY}{why}{RESET}")
+    print(f"{GREY}set with: /model <name> · or pick in the admin UI: /proxy-ui{RESET}")
 
 
 def cmd_git(agent: "Agent") -> None:

@@ -106,7 +106,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"{GREY}  proxy{RESET} {MINT}{base}{RESET} {GREEN}live{RESET} {GREY}· model{RESET} {MINT}{cfg.model}{RESET}")
         else:
             print(f"{GREY}  proxy{RESET} {GREY}not running — open another terminal and run:{RESET} {MINT}claume proxy{RESET}")
-        print(f"{GREY}  model{RESET} {MINT}{cfg.model}{RESET}")
+            print(f"{GREY}  model{RESET} {MINT}{cfg.model}{RESET}")
     else:
         print(f"{GREY}  provider{RESET} {MINT}{cfg.get('provider')}{RESET} {GREY}· model{RESET} {MINT}{cfg.model}{RESET}")
     print(f"{GREY}  workspace{RESET} {MINT}{workspace}{RESET}")
