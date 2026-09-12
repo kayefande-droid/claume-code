@@ -388,6 +388,26 @@ def cmd_doctor() -> None:
     row("skills", sdir.exists(), str(sdir))
     row("vault", config.claume_dir().exists(), str(config.claume_dir()))
     print(f"{'─' * 56}")
+
+    # Live MCP probe: handshakes + tools/list with vaulted keys injected.
+    servers_cfg = config.Config().get("mcp_servers", {})
+    servers = servers_cfg if isinstance(servers_cfg, dict) else {}
+    if servers:
+        try:
+            from . import mcp as mcpmod
+
+            tools = mcpmod.list_all_tools()
+            mcpmod.shutdown_all()
+            for name in sorted(servers):
+                tlist = tools.get(name, [])
+                ok = bool(tlist) and not str(tlist[0]).startswith("<error")
+                note = f"{len(tlist)} tools" if ok else str(tlist[0] if tlist else "no tools")[:120]
+                row(f"mcp:{name}", ok, note)
+        except Exception as exc:
+            row("mcp probe", False, str(exc)[:120])
+    else:
+        print(f"│ {GREY}no MCP servers configured — /mcp-preset design{RESET}")
+
     print(f"{GREY}tip: run /proxy if the proxy row shows ✗{RESET}")
 
 
