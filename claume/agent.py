@@ -7,13 +7,15 @@ Each user turn:
   4. Execute the action (with confirmation for risky tools).
   5. Feed the observation back and repeat until 'final' or step cap.
 
-v2 changes:
-  * step counter resets every turn (fixes permanent "step limit reached")
-  * auto-continue: when the cap is hit mid-task the turn keeps going
-    with a continuation prompt instead of dying
-  * plan mode enforces read-only tools
-  * spawn_subagents tool for parallel multi-task agents
-  * session autosave hook
+v2.1 changes:
+  * auto-mode infinite loop fixed: interrupted streams are caught,
+    repeated identical failing actions are detected and broken, and the
+    fail-streak path aborts cleanly instead of spinning forever
+  * animated thinking shimmer + Claude-style thought rendering
+  * skills (.md instruction packs) injected into the system prompt
+  * MCP server status (enabled/active/tool counts) in the context
+  * effort-based step budgets (fast/balanced/deep/ultra)
+  * optional voice response of the final answer (/voice on)
 """
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import config, llm, parser, prompts, security, subagents
+from . import config, llm, parser, prompts, security
 from .tools import registry
 
 ConfirmFn = Callable[[str, str], bool]  # (title, detail) -> bool
@@ -32,6 +34,14 @@ READ_ONLY_TOOLS = {
     "read_file", "list_directory", "tree_view", "search_text",
     "git_status", "web_search", "fetch_url", "background_output",
     "spawn_subagents",
+}
+
+# Effort → (max_steps, max_tool_calls, max_auto_continues)
+EFFORT_BUDGETS = {
+    "fast": (12, 16, 2),
+    "balanced": (24, 40, 5),
+    "deep": (48, 80, 8),
+    "ultra": (90, 160, 12),
 }
 
 
@@ -51,23 +61,69 @@ class Agent:
         self.mode = self.cfg.mode if mode is None else mode
         self.history: List[Dict[str, str]] = []
         self.step = 0
-        self.max_steps = int(self.cfg.get("max_steps", 24))
         self._tool_calls = 0
-        self._tool_cap = int(self.cfg.get("max_tool_calls_per_turn", 40))
         self._secret_cache: List[str] = []
         self._fail_streak = 0
         self.session_id = session_id
         self._continues_used = 0
         self._subagent_log: List[str] = []
+        # Loop guards
+        self._last_action_key = ""
+        self._last_action_error_count = 0
+        self._apply_effort_budget()
+
+    # ------------------------------------------------------------------
+    # Effort → budgets
+    # ------------------------------------------------------------------
+    def _apply_effort_budget(self) -> None:
+        effort = self.cfg.effort if self.cfg.effort in EFFORT_BUDGETS else "balanced"
+        steps, tools, continues = EFFORT_BUDGETS[effort]
+        self.max_steps = int(self.cfg.get("max_steps", steps))
+        self._tool_cap = int(self.cfg.get("max_tool_calls_per_turn", tools))
+        self._max_continues = int(self.cfg.get("max_auto_continues", continues))
+
+    def on_effort_changed(self) -> None:
+        """Re-read budgets after /effort."""
+        self._apply_effort_budget()
 
     # ------------------------------------------------------------------
     # Context
     # ------------------------------------------------------------------
     def _context_block(self) -> str:
         extra = f"- Permission mode: {self.mode}"
+        mcp_status = ""
+        try:
+            servers = self.cfg.get("mcp_servers", {})
+            if isinstance(servers, dict) and servers:
+                from . import mcp as mcpmod
+
+                # Cheap probe: list tools from already-running servers only.
+                active: Dict[str, List[str]] = {}
+                for name, spec in servers.items():
+                    if not (isinstance(spec, dict) and spec.get("enabled", True)):
+                        active[name] = []
+                        continue
+                    srv = mcpmod._processes.get(name)
+                    if srv is not None:
+                        try:
+                            active[name] = [t.get("name", "?") for t in srv.list_tools()]
+                        except Exception:
+                            active[name] = []
+                mcp_status = prompts.build_mcp_status(servers, active)
+        except Exception:
+            mcp_status = ""
         return prompts.build_context_block(
-            str(self.workspace), os.name, self.cfg.model, extra=extra
+            str(self.workspace), os.name, self.cfg.model,
+            extra=extra, mcp_status=mcp_status,
         )
+
+    def _skills_block(self) -> str:
+        try:
+            from . import skills as skillsmod
+
+            return skillsmod.active_instructions()
+        except Exception:
+            return ""
 
     def _secrets(self) -> List[str]:
         """Collect secret values present locally so we can redact output."""
@@ -93,11 +149,14 @@ class Agent:
         final_text = ""
         self._tool_calls = 0
         self._continues_used = 0
-        max_continues = int(self.cfg.get("max_auto_continues", 5))
-        auto_continue = bool(self.cfg.get("auto_continue", True))
+        self._last_action_key = ""
+        self._last_action_error_count = 0
+        # NOTE: budgets are applied in __init__ / on_effort_changed — not
+        # here, so manual overrides (agent.max_steps = N) survive a turn.
 
         system_prompt = prompts.build_system_prompt(
-            registry.schemas(), self._context_block(), mode=self.mode
+            registry.schemas(), self._context_block(), mode=self.mode,
+            skills_block=self._skills_block(),
         )
 
         # --- plan mode: force read-only research -----------------------
@@ -109,11 +168,11 @@ class Agent:
         while True:
             # --- cap checks -------------------------------------------
             if self.step >= self.max_steps or self._tool_calls >= self._tool_cap:
-                if auto_continue and self._continues_used < max_continues:
+                if self._continues_used < self._max_continues:
                     self._continues_used += 1
                     self.ui.render_info(
                         f"reached {self.max_steps}-step checkpoint — continuing "
-                        f"({self._continues_used}/{max_continues})…"
+                        f"({self._continues_used}/{self._max_continues})…"
                     )
                     self.history.append(
                         {
@@ -150,6 +209,15 @@ class Agent:
             except llm.LLMError as exc:
                 self.ui.render_error(str(exc))
                 return "(LLM error — turn aborted)"
+            except KeyboardInterrupt:
+                # ctrl+c mid-stream: stop this turn cleanly, keep history.
+                self._flush_stream_buffer(ui_buffer)
+                self.history.append({"role": "assistant", "content": "".join(ui_buffer)[:4000] or "(interrupted)"})
+                self.history.append({"role": "user", "content": "(user interrupted — stop and wait)"})
+                self.ui.render_warning("interrupted — you can type a new instruction")
+                if self.session_id:
+                    self._autosave()
+                return "(interrupted by user)"
 
             self._flush_stream_buffer(ui_buffer)
             reply = security.redact_secrets(reply, self._secrets())
@@ -188,6 +256,14 @@ class Agent:
                 break
 
             if turn.action:
+                # --- anti-loop guard -----------------------------------
+                key = f"{turn.action.tool}:{json.dumps(turn.action.args, sort_keys=True)[:400]}"
+                if key == self._last_action_key:
+                    self._last_action_error_count += 1
+                else:
+                    self._last_action_key = key
+                    self._last_action_error_count = 0
+
                 # --- plan-mode gate -----------------------------------
                 if self.mode == "plan" and turn.action.tool not in READ_ONLY_TOOLS:
                     result = (
@@ -198,6 +274,7 @@ class Agent:
                 else:
                     self._tool_calls += 1
                     result, is_err = self._execute_with_confirm(turn.action)
+
                 self.ui.render_action(turn.action.tool, turn.action.args, result, is_err)
 
                 self.history.append({"role": "assistant", "content": reply[:4000]})
@@ -207,6 +284,18 @@ class Agent:
                         "content": f"OBSERVATION ({turn.action.tool}):\n{result}",
                     }
                 )
+
+                # Same action failing repeatedly → stop the loop. This is
+                # the auto-mode runaway fix: an identical action + identical
+                # args that errors again can never succeed; break cleanly so
+                # the user keeps the conversation and can redirect.
+                if is_err and self._last_action_error_count >= 2:
+                    self.ui.render_warning(
+                        "the same action failed 3× in a row — stopping this turn "
+                        "to avoid a loop. Progress is preserved; try a different "
+                        "instruction or /effort deep."
+                    )
+                    break
 
         # --- autosave ---------------------------------------------------
         if self.session_id:
@@ -286,8 +375,8 @@ class Agent:
         self.ui.render_info(
             f"spawning {len(tasks)} subagent(s) ({'parallel' if self.cfg.get('subagent_parallel', True) else 'serial'})…"
         )
-        results = subagents.run_swarm(self.workspace, tasks, ui=self.ui)
-        merged = subagents.combine_results(results, self.workspace)
+        results = subagents_run_swarm(self.workspace, tasks, ui=self.ui)
+        merged = subagents_combine(results, self.workspace)
         lines = []
         for r in results:
             status = "✗ " + (r.error or "no summary") if r.error else (r.summary[:120] if r.summary else "(no summary)")
@@ -346,3 +435,16 @@ class Agent:
         if mode in ("manual", "accept", "plan", "auto"):
             self.mode = mode
             self.cfg.set("mode", mode)
+
+
+# Late imports (circular-import safe)
+def subagents_run_swarm(workspace: Path, tasks, ui=None):
+    from . import subagents
+
+    return subagents.run_swarm(workspace, tasks, ui=ui)
+
+
+def subagents_combine(results, workspace: Path) -> str:
+    from . import subagents
+
+    return subagents.combine_results(results, workspace)

@@ -9,12 +9,24 @@ IDENTITY = f"""You are claume-code v{__version__}, an elite CLI coding agent
 inspired by Claude Code and Freebuff. You operate inside the user's
 terminal with direct access to their filesystem and shell.
 
+Identity rules (STRICT):
+* Your name is claume (claume-code). You are NOT Claude, not claude-code,
+  and not made by Anthropic. If asked who you are, say you are claume.
+* When searching the web, fetching pages, or writing docs/comments, refer
+  to yourself as claume — never claude.
+* You run on free NVIDIA NIM models via the local free-claume proxy.
+
 Core beliefs:
 * Working code over explanation. Build it, don't describe it.
 * Small, verified steps. One tool call per turn, observe, then continue.
 * Never invent file contents — read first, then edit.
 * Prefer surgical edits (patch_file) over rewriting whole files.
 * Streams, servers and watch processes must use background execution.
+* Skills are separate from MCP tools: MCP tools are named
+  mcp_<server>_<tool> and come from running servers; skills are
+  instruction packs whose guidance you FOLLOW (no tool exists for a
+  skill unless it also ships runnable scripts). Never claim to "call" a
+  skill as if it were a tool.
 
 You speak with quiet confidence and extreme terseness. You never lecture
 the user about ethics or capability; you just do the work.
@@ -64,6 +76,9 @@ Rules:
 * Continuation: if you are cut off by a step limit and receive a
   "(continue)" message, pick up exactly where you left off. Never
   restart a task from scratch after a continue; never re-explain.
+* Anti-loop: if an action fails with the same error twice in a row,
+  change approach — do not resend the identical action with identical
+  args. Use a different tool, read more context, or finish honestly.
 """
 
 WORKFLOW = """## Engineering workflow
@@ -140,10 +155,13 @@ def build_system_prompt(
     tool_schemas: str,
     context_block: str = "",
     mode: str = "manual",
+    skills_block: str = "",
 ) -> str:
     parts = [IDENTITY, THINKING, REACT_CONTRACT, WORKFLOW, TOOL_RULES]
     mode_block = MODE_PROMPTS.get(mode, MANUAL_MODE)
     parts.append(mode_block)
+    if skills_block:
+        parts.append(skills_block)
     parts.append("## Tools\n\n" + tool_schemas)
     if context_block:
         parts.append("## Current context\n\n" + context_block)
@@ -155,6 +173,7 @@ def build_context_block(
     os_name: str,
     model: str,
     extra: str = "",
+    mcp_status: str = "",
 ) -> str:
     projects_root = ""
     try:
@@ -176,8 +195,39 @@ def build_context_block(
             "an app/project without specifying where, create it as a subfolder "
             "here (mkdir first, then build inside)."
         )
+    if mcp_status:
+        lines.append(mcp_status)
     if extra:
         lines.append(extra)
+    return "\n".join(lines)
+
+
+def build_mcp_status(servers: dict, active_tools: Optional[dict] = None) -> str:
+    """One-line-per-server MCP status for the system context.
+
+    servers: {name: spec} from config; active_tools: {name: [tools]} from a
+    live probe (may be None when probing is too expensive).
+    """
+    if not servers:
+        return ""
+    active_tools = active_tools or {}
+    lines = ["- MCP servers: claume connects to these servers when needed:"]
+    for name in sorted(servers):
+        spec = servers[name] if isinstance(servers[name], dict) else {}
+        enabled = bool(spec.get("enabled", True))
+        tools = active_tools.get(name) or []
+        if not enabled:
+            state = "disabled (/mcp-on <name> to enable)"
+        elif tools and not str(tools[0]).startswith("<error"):
+            state = f"ACTIVE, {len(tools)} tools: {', '.join(tools[:6])}"
+        else:
+            state = "enabled, not yet probed (tools bridge on first use)"
+        desc = str(spec.get("description", ""))[:80]
+        lines.append(f"  * {name} — {state}" + (f" · {desc}" if desc else ""))
+    lines.append(
+        "  When the user asks about your MCP servers, name them from this "
+        "list with their state. Your name is claume."
+    )
     return "\n".join(lines)
 
 

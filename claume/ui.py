@@ -2,14 +2,15 @@
 
 Zero dependencies: pure ANSI. Designed to feel like Claude Code and
 Freebuff: bold banner, dim stream of thought, bright tool results.
-v2: color themes, mode chips, pixel mascot, expandable output, clipboard.
+v2.1: animated thinking shimmer, Claude-style chat highlighting,
+mouse-tracking pixel mascot, Freebuff-style input box, copy mode.
 """
 from __future__ import annotations
 
 import os
 import sys
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # --------------------------------------------------------------------------
 # Windows console: force UTF-8 so pixel glyphs (█ ╗ ║ …) don't crash cp1252
@@ -109,9 +110,8 @@ THEMES: Dict[str, Dict[str, str]] = {
         "SOFT": "\033[38;5;250m",
         "TEXT": "\033[38;5;250m",
         "MUTED": "\033[38;5;244m",
-        "WOLD": "\033[38;5;220m",  # (typo tolerated for mono)
         "RED": "\033[38;5;247m",
-        "BLUE": "\033[38;8;246m",
+        "BLUE": "\033[38;5;246m",
         "PURPLE": "\033[38;5;248m",
         "GOLD": "\033[38;5;252m",
     },
@@ -208,17 +208,16 @@ def _clear_screen() -> None:
 
 def animate_banner(fast: bool = False) -> None:
     """Reveal the banner line-by-line with a typewriter shimmer."""
-    speed = 0.0 if fast else 0.045
-    if not COLOR or not sys.stdout.isatty():
+    speed = 0.0 if fast or not COLOR or not sys.stdout.isatty() else 0.045
+    if speed == 0.0:
         for row in banner_lines():
             print(row)
         return
     _clear_screen()
     for row in banner_lines():
         print(row)
-        if speed:
-            sys.stdout.flush()
-            time.sleep(speed)
+        sys.stdout.flush()
+        time.sleep(speed)
     print()
 
 
@@ -230,7 +229,7 @@ def pixel_tagline(version: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# Pixel bot mascot — a tiny animated agent face
+# Pixel bot mascot — eyes follow your mouse cursor
 # --------------------------------------------------------------------------
 MASCOT_FRAMES = [
     [
@@ -267,20 +266,118 @@ MASCOT_MOODS = {
     "sad": "hmm, error",
 }
 
+# Mouse-watching state (module-level so any Mascot instance shares it)
+_MOUSE_ENABLED = True
+_MOUSE_THREAD: Optional[Any] = None
+_MOUSE_POS: Dict[str, float] = {"x": 0.5, "y": 0.5}
+
+
+def _start_mouse_thread() -> None:
+    """Watch the mouse cursor without blocking typing.
+
+    Windows: polls GetCursorPos via ctypes — needs no stdin, no terminal
+    mode changes, and tracks the cursor even outside the terminal window.
+    POSIX: best-effort SGR mouse-sequence reader on the tty.
+    """
+    global _MOUSE_THREAD
+    if _MOUSE_THREAD is not None and _MOUSE_THREAD.is_alive():
+        return
+    import threading
+
+    if os.name == "nt":
+
+        def _win_loop() -> None:
+            try:
+                import ctypes
+
+                class POINT(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+                pt = POINT()
+                user32 = ctypes.windll.user32
+                while _MOUSE_ENABLED:
+                    if user32.GetCursorPos(ctypes.byref(pt)):
+                        sw = user32.GetSystemMetrics(0) or 1
+                        sh = user32.GetSystemMetrics(1) or 1
+                        _MOUSE_POS["x"] = max(0.0, min(1.0, pt.x / max(1, sw)))
+                        _MOUSE_POS["y"] = max(0.0, min(1.0, pt.y / max(1, sh)))
+                    time.sleep(0.12)
+            except Exception:
+                pass
+
+        _MOUSE_THREAD = threading.Thread(target=_win_loop, name="claume-mouse", daemon=True)
+        _MOUSE_THREAD.start()
+        return
+
+    def _posix_loop() -> None:
+        # Best-effort: parse SGR mouse sequences if the terminal sends them.
+        try:
+            import select
+            import termios
+            import tty
+
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
+            try:
+                while _MOUSE_ENABLED:
+                    r, _, _ = select.select([fd], [], [], 0.2)
+                    if not r:
+                        continue
+                    chunk = os.read(fd, 64).decode("utf-8", "replace")
+                    for part in chunk.split("\x1b[<"):
+                        try:
+                            body = part.split("M")[0].split("m")[0]
+                            btn, x, y = body.split(";")[:3]
+                            cols, rows = os.get_terminal_size()
+                            _MOUSE_POS["x"] = float(x) / max(1, cols)
+                            _MOUSE_POS["y"] = float(y) / max(1, rows)
+                        except Exception:
+                            continue
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        except Exception:
+            pass
+
+    _MOUSE_THREAD = threading.Thread(target=_posix_loop, name="claume-mouse", daemon=True)
+    _MOUSE_THREAD.start()
+
+
+def eyes_for_cursor(nx: float) -> str:
+    """Pick an eye glyph pair for the cursor's normalized x position."""
+    if nx < 0.25:
+        return "◐  ○"   # looking left
+    if nx < 0.40:
+        return "◕  ◓"   # left-center
+    if nx < 0.60:
+        return "◉  ◉"   # center
+    if nx < 0.75:
+        return "◓  ◑"   # right-center
+    return "○  ◗"       # looking right
+
 
 class Mascot:
-    """Animated pixel bot rendered beside a status line."""
+    """Animated pixel bot rendered beside a status line.
 
-    def __init__(self, enabled: bool = True) -> None:
+    With mouse_tracking=True the bot's eyes follow the real mouse cursor
+    (Windows: GetCursorPos polling thread; POSIX: SGR sequences).
+    """
+
+    def __init__(self, enabled: bool = True, mouse_tracking: bool = True) -> None:
         self.enabled = enabled and COLOR and sys.stdout.isatty()
         self._frame = 0
+        self.mouse_tracking = mouse_tracking and self.enabled
+        if self.mouse_tracking:
+            _start_mouse_thread()
 
     def render(self, mood: str = "idle", note: str = "") -> str:
         if not self.enabled:
             return ""
         self._frame = (self._frame + 1) % len(MASCOT_FRAMES)
-        art = MASCOT_FRAMES[self._frame]
+        art = list(MASCOT_FRAMES[self._frame])
         label = MASCOT_MOODS.get(mood, mood)
+        if self.mouse_tracking:
+            art[1] = f" │ {eyes_for_cursor(_MOUSE_POS['x'])} │ "
         lines = []
         for i, row in enumerate(art):
             eye = f"{SOFT}{row}{RESET}" if i in (1, 2) else f"{MUTED}{row}{RESET}"
@@ -298,6 +395,148 @@ class Mascot:
         block = self.render(mood, note)
         if block:
             print(block)
+
+    def stop(self) -> None:
+        global _MOUSE_ENABLED
+        _MOUSE_ENABLED = False
+
+
+# --------------------------------------------------------------------------
+# Freebuff-style input box: bordered prompt with mode/session label
+# --------------------------------------------------------------------------
+def _term_width() -> int:
+    try:
+        return max(40, min(100, os.get_terminal_size().columns))
+    except Exception:
+        return 80
+
+
+def input_box_top(mode: str = "", session_label: str = "") -> None:
+    """Print the input box top border with a centered label."""
+    w = _term_width()
+    label = " claume "
+    if mode:
+        label = f" {mode} "
+    if session_label:
+        label += f"· {session_label} "
+    inner = w - 2
+    padded = label.center(inner, "─")
+    print(f"{MUTED}╭{padded[:inner]}╮{RESET}")
+
+
+def input_box_prompt() -> str:
+    """Left border + prompt symbol shown before input()."""
+    sys.stdout.write(f"{MUTED}│{RESET} ")
+    return f"{ACCENT}{BOLD}❯{RESET} "
+
+
+def input_box_bottom() -> None:
+    """Bottom border printed after each turn completes."""
+    w = _term_width()
+    print(f"{MUTED}╰{'─' * w}╯{RESET}")
+
+
+# --------------------------------------------------------------------------
+# Click-and-pull copy mode: drag-select → clipboard (Windows)
+# --------------------------------------------------------------------------
+def copy_mode() -> None:
+    """Interactive copy helper: on Windows, watches for a left-button
+    drag; when the drag ends, reads whatever text the terminal put on the
+    clipboard (Windows Terminal copies on select with the right settings,
+    and ctrl+shift+c always works) and re-copies via claume so /copy and
+    paste work everywhere. Enter or ctrl+c exits.
+    """
+    from .ui import ACCENT, BOLD, MUTED, RESET
+
+    print(f"{ACCENT}⧉ copy mode{RESET} {MUTED}— drag to select text, then release · Enter to exit{RESET}")
+    if os.name != "nt":
+        print(f"{MUTED}  (use your terminal's native selection · press Enter to exit){RESET}")
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            pass
+        print(f"{MUTED}copy mode off{RESET}")
+        return
+
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    last_clip = _read_clipboard_text()
+    print(f"{MUTED}  waiting for a drag-selection…{RESET}")
+    try:
+        while True:
+            # Enter pressed?
+            if user32.GetAsyncKeyState(0x0D) & 1:
+                break
+            # Left button currently down?
+            if user32.GetAsyncKeyState(0x01) & 0x8000:
+                start = _cursor_pos()
+                # wait for release
+                while user32.GetAsyncKeyState(0x01) & 0x8000:
+                    time.sleep(0.05)
+                end = _cursor_pos()
+                time.sleep(0.15)  # let the terminal update its selection
+                if start and end and (abs(start[0] - end[0]) + abs(start[1] - end[1])) > 6:
+                    sel = _read_clipboard_text()
+                    if sel and sel != last_clip:
+                        last_clip = sel
+                        preview = " ".join(sel.split())[:60]
+                        print(f"{ACCENT}  ⧉ pulled {len(sel)} chars:{RESET} {preview}…")
+                    else:
+                        print(
+                            f"{MUTED}  selection detected — if your terminal didn't copy "
+                            f"it, press ctrl+shift+c then it lands in the clipboard{RESET}"
+                        )
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    print(f"{MUTED}copy mode off{RESET}")
+
+
+def _cursor_pos() -> Optional[tuple]:
+    try:
+        import ctypes
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        pt = POINT()
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+            return (pt.x, pt.y)
+    except Exception:
+        pass
+    return None
+
+
+def _read_clipboard_text() -> str:
+    """Best-effort clipboard READ (Windows)."""
+    if os.name != "nt":
+        return ""
+    user32 = None
+    try:
+        import ctypes
+
+        CF_UNICODETEXT = 13
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        if not user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+            return ""
+        if not user32.OpenClipboard(0):
+            return ""
+        try:
+            handle = user32.GetClipboardData(CF_UNICODETEXT)
+            if not handle:
+                return ""
+            ptr = kernel32.GlobalLock(handle)
+            if not ptr:
+                return ""
+            data = ctypes.c_wchar_p(ptr).value or ""
+            kernel32.GlobalUnlock(handle)
+            return data
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return ""
 
 
 # --------------------------------------------------------------------------
@@ -319,7 +558,7 @@ class Spinner:
     def __init__(self, label: str = "thinking") -> None:
         self.label = label
         self._running = False
-        self._thread: Optional[__import__("threading").Thread] = None
+        self._thread: Optional[Any] = None
 
     def __enter__(self) -> "Spinner":
         import threading
@@ -371,6 +610,9 @@ def copy_to_clipboard(text: str) -> bool:
             data = text.encode("utf-16-le") + b"\x00\x00"
             handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
             ptr = kernel32.GlobalLock(handle)
+            if not ptr:
+                user32.CloseClipboard()
+                return False
             ctypes.memmove(ptr, data, len(data))
             kernel32.GlobalUnlock(handle)
             user32.SetClipboardData(CF_UNICODETEXT, handle)
@@ -419,6 +661,55 @@ def mode_chip(mode: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# Animated thinking panel — Claude-style '✻ Thinking…' shimmer
+# --------------------------------------------------------------------------
+class ThinkingPanel:
+    """Renders a shimmering '✻ Thinking… Ns' line while the model streams,
+    then collapses to a compact one-line thought summary — the Claude Code
+    look. Uses only \\r rewriting, safe with normal input()."""
+
+    FRAMES = ["✻", "✽", "✶", "✳"]
+
+    def __init__(self) -> None:
+        self._start: Optional[float] = None
+        self._line_len = 0
+        self._words = ""
+
+    def begin(self, first_words: str = "") -> None:
+        if not COLOR or not sys.stdout.isatty() or self._start is not None:
+            return
+        self._start = time.time()
+        self._words = " ".join(first_words.split())[:70]
+        self._line_len = 0
+
+    def tick(self, frame: int) -> None:
+        if self._start is None:
+            return
+        elapsed = int(time.time() - self._start)
+        icon = self.FRAMES[frame % len(self.FRAMES)]
+        text = f"{PURPLE}{icon} thinking…{RESET} {MUTED}{elapsed}s{RESET}"
+        sys.stdout.write("\r" + " " * max(self._line_len, 40) + "\r")
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        self._line_len = len(icon) + len(f" thinking… {elapsed}s") + 12
+
+    def set_words(self, words: str) -> None:
+        self._words = " ".join((words or "").split())[:70]
+
+    def end(self) -> None:
+        if self._start is None:
+            return
+        elapsed = int(time.time() - self._start)
+        if COLOR and sys.stdout.isatty():
+            sys.stdout.write("\r" + " " * max(self._line_len, 40) + "\r")
+        if self._words:
+            print(f"{PURPLE}✻ thought{RESET} {MUTED}({elapsed}s){RESET} {ITALIC}{self._words}{RESET}")
+        else:
+            print(f"{PURPLE}✻ thought{RESET} {MUTED}({elapsed}s){RESET}")
+        self._start = None
+
+
+# --------------------------------------------------------------------------
 # Render helpers used by the agent
 # --------------------------------------------------------------------------
 class UI:
@@ -426,8 +717,9 @@ class UI:
         self.quiet = quiet
         self._streaming = False
         self.expand_output = False  # show full tool output (toggled by /expand)
-        self.mascot = Mascot(enabled=not quiet)
+        self.mascot = Mascot(enabled=not quiet, mouse_tracking=True)
         self.last_final = ""  # remembered for /copy
+        self.thinking = ThinkingPanel()
 
     # -- boot ---------------------------------------------------------
     def show_banner(self, version: str, fast: bool = False) -> None:
@@ -442,7 +734,6 @@ class UI:
             return
         if not self._streaming:
             self._streaming = True
-            sys.stdout.write(f"{MUTED}▌ ")
         buffer.append(token)
         sys.stdout.write(token.replace("\n", "\n  "))
         sys.stdout.flush()
@@ -454,11 +745,33 @@ class UI:
             self._streaming = False
         buffer.clear()
 
+    # -- animated thinking ----------------------------------------------
+    def thought_stream_start(self) -> None:
+        """Begin the '✻ thinking' shimmer (before the model replies)."""
+        if self.quiet:
+            return
+        self.thinking.begin()
+
+    def thought_stream_tick(self, frame: int) -> None:
+        if self.quiet:
+            return
+        self.thinking.tick(frame)
+
+    def thought_stream_end(self, thought: str = "") -> None:
+        if self.quiet:
+            return
+        if thought:
+            self.thinking.set_words(thought)
+        self.thinking.end()
+
     # -- agent renders --------------------------------------------------
     def render_thought(self, thought: str) -> None:
+        """Claude Code style collapsed thought line."""
         if not thought or self.quiet:
             return
-        print(f"{PURPLE}◈ thought{RESET} {ITALIC}{thought}{RESET}")
+        words = " ".join(thought.split())
+        head = words[:80] + ("…" if len(words) > 80 else "")
+        print(f"{PURPLE}✻ thinking{RESET} {ITALIC}{head}{RESET}")
 
     def render_action(self, tool: str, args: dict, result: str, is_error: bool) -> None:
         if self.quiet:
@@ -467,16 +780,15 @@ class UI:
         color = RED if is_error else ACCENT
         summary = str(args.get("path") or args.get("command") or args.get("url") or args.get("query") or "")
         summary = " ".join(str(summary).split())[:70]
-        print(f"{color}{icon} {tool}{RESET} {MUTED}{summary}{RESET}")
+        print(f"{color}{icon} {BOLD}{tool}{RESET} {MUTED}{summary}{RESET}")
         if result and not self.quiet:
             lines = result.splitlines()
-            shown = lines[:14]
+            shown = lines if self.expand_output else lines[:14]
             for line in shown:
                 print(f"  {MUTED}│{RESET} {SILVER}{line[:150]}{RESET}")
-            hidden = len(lines) - 14
+            hidden = len(lines) - len(shown)
             if hidden > 0:
-                hint = f"  {MUTED}│ … +{hidden} more lines — /expand to show full output{RESET}"
-                print(hint)
+                print(f"  {MUTED}│ … +{hidden} more lines — /expand to show full output{RESET}")
 
     def render_error(self, message: str) -> None:
         print(f"{RED}✗ {message}{RESET}")

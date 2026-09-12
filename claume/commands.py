@@ -28,40 +28,58 @@ HELP_LINES = [
     f"  {MINT}/help{RESET}              show this help",
     f"  {MINT}/new{RESET}               start a fresh conversation",
     f"  {MINT}/model{RESET} [name]     show or set the model",
-    f"  {MINT}/effort{RESET} <level>   fast | balanced | deep",
+    f"  {MINT}/effort{RESET} <level>   fast | balanced | deep | ultra (step budgets scale too)",
     f"  {MINT}/auto{RESET} [on|off]    toggle auto mode (alias of /mode auto|manual)",
     f"  {MINT}/mode{RESET} [name]      manual | accept | plan | auto (Shift+Tab cycles)",
     f"  {MINT}/theme{RESET} [name]     color theme: nvidia-green, claude-orange, cyber-blue, synthwave, matrix, sunset, mono",
     f"  {MINT}/expand{RESET} [on|off]  show full tool output (default: 14 lines)",
     f"  {MINT}/copy{RESET} [text]      copy the last answer (or given text) to clipboard",
-    f"  {MINT}/mascot{RESET}           show the claume pixel bot",
+    f"  {MINT}/copymode{RESET}         click-and-pull copy: drag-select text → clipboard",
+    f"  {MINT}/mascot{RESET}           show the claume pixel bot (eyes follow your mouse)",
+    f"  {MINT}/voice{RESET} [on|off]   AI voice responses (British male/female accents)",
+    f"  {MINT}/voice-accent{RESET} <a> male-british | female-british | male | female",
+    f"  {MINT}/say{RESET} <text>       make claume speak text now",
+    f"  {MINT}/hear{RESET}             one voice command (needs: pip install SpeechRecognition pyaudio)",
     f"  {MINT}/projects{RESET}         list everything claume built (~/.claume/projects)",
     f"  {MINT}/project{RESET} <name>   show/create a project folder there",
     f"  {MINT}/repo{RESET}             show the upstream GitHub repo + git remote status",
     f"  {MINT}/session{RESET} [id]     show session info / start a specific one",
+    f"  {MINT}/sessions{RESET}         list sessions with project name + time",
+    f"  {MINT}/rename{RESET} <id|-> <project> [name]  rename current or given session",
     f"  {MINT}/resume{RESET}           resume a past session (interactive picker)",
     f"  {MINT}/continue{RESET}         resume the most recent session",
     f"  {MINT}/agents{RESET} <t1>; <t2>  run parallel subagents and merge reports",
     f"  {MINT}/design{RESET} <prompt>  run the MCP design pipeline (Link System)",
     f"  {MINT}/mcp-preset{RESET} <name>  install a server preset (design)",
-    f"  {MINT}/keys{RESET}              list vaulted API keys (masked)",
+    f"  {MINT}/keys{RESET}             list vaulted API keys (masked)",
     f"  {MINT}/key{RESET} <NAME>       set a key (e.g. /key GROQ_API_KEY)",
     f"  {MINT}/key-del{RESET} <NAME>   remove a key from the vault",
     f"  {MINT}/provider{RESET} <name>  nvidia | groq | openrouter | deepseek | openai …",
-    f"  {MINT}/proxy{RESET}             start/reuse the free-claume proxy",
+    f"  {MINT}/proxy{RESET}            start/reuse the free-claume proxy",
     f"  {MINT}/proxy-ui{RESET}         open the luxurious proxy dashboard in browser",
-    f"  {MINT}/skills{RESET}            list installed skills",
-    f"  {MINT}/skill{RESET} <owner/repo>  download a skill from GitHub",
-    f"  {MINT}/mcp{RESET}               list configured MCP servers + live tools",
+    f"  {MINT}/skills{RESET}           list skills with active/inactive status",
+    f"  {MINT}/skill{RESET} <owner/repo>  install a skill from GitHub (e.g. ui-ux-pro-max)",
+    f"  {MINT}/skill-rm{RESET} <name>  remove an installed skill",
+    f"  {MINT}/skill-on{RESET} <name>  activate a skill (its .md guides every task)",
+    f"  {MINT}/skill-off{RESET} <name> deactivate a skill",
+    f"  {MINT}/skill-all{RESET} [on|off]  activate every skill at once (or none)",
+    f"  {MINT}/skill-use{RESET} <name> adopt one skill for the next turn only",
+    f"  {MINT}/skill-run{RESET} <skill> <script> [args]  run a bundled skill script",
+    f"  {MINT}/mcp{RESET}              list servers with enabled/disabled + active/inactive",
     f"  {MINT}/mcp-add{RESET} <name> <command...>  register an MCP server",
-    f"  {MINT}/mcp-del{RESET} <name>    remove an MCP server",
-    f"  {MINT}/md{RESET} <name>         create a new instruction (.md) file",
-    f"  {MINT}/git{RESET}               git status",
-    f"  {MINT}/config{RESET}            show config",
-    f"  {MINT}/doctor{RESET}            environment health check",
-    f"  {MINT}/update{RESET}            self-update from GitHub",
-    f"  {MINT}/recommend{RESET}         model recommendations for your machine",
-    f"  {MINT}/exit{RESET}              quit",
+    f"  {MINT}/mcp-del{RESET} <name>   remove an MCP server",
+    f"  {MINT}/mcp-on{RESET} <name>    enable a server (auto-starts on use)",
+    f"  {MINT}/mcp-off{RESET} <name>   disable a server (stays configured, never spawns)",
+    f"  {MINT}/mcp-key{RESET} <name> <ENV_VAR>  vault the key a server needs",
+    f"  {MINT}/mcp-test{RESET} [name]  live handshake probe → ACTIVE/INACTIVE",
+    f"  {MINT}/md{RESET} <name>        create a new instruction (.md) file",
+    f"  {MINT}/git{RESET}              git status",
+    f"  {MINT}/config{RESET}           show config",
+    f"  {MINT}/doctor{RESET}           environment health check",
+    f"  {MINT}/update{RESET}           self-update from GitHub",
+    f"  {MINT}/reinstall{RESET}        repair/reinstall claume in place (keeps config+vault)",
+    f"  {MINT}/recommend{RESET}        model recommendations for your machine",
+    f"  {MINT}/exit{RESET}             quit",
 ]
 
 
@@ -85,13 +103,18 @@ def cmd_model(args: List[str]) -> None:
     print(f"{GREEN}✔ model set to {model}{RESET}")
 
 
-def cmd_effort(args: List[str]) -> None:
+def cmd_effort(args: List[str], agent: Optional["Agent"] = None) -> None:
     cfg = config.Config()
-    if not args or args[0] not in ("fast", "balanced", "deep"):
-        print(f"{GREY}effort = {MINT}{cfg.effort}{RESET} {GREY}(choose: fast | balanced | deep){RESET}")
+    if not args or args[0] not in ("fast", "balanced", "deep", "ultra"):
+        print(f"{GREY}effort = {MINT}{cfg.effort}{RESET} {GREY}(choose: fast | balanced | deep | ultra){RESET}")
+        print(f"{GREY}  budgets — fast: 12 steps · balanced: 24 · deep: 48 · ultra: 90 (+auto-continues){RESET}")
         return
     cfg.set("effort", args[0])
-    print(f"{GREEN}✔ effort = {args[0]}{RESET}")
+    if agent is not None and hasattr(agent, "on_effort_changed"):
+        agent.on_effort_changed()
+    budgets = {"fast": (12, 16), "balanced": (24, 40), "deep": (48, 80), "ultra": (90, 160)}
+    steps, tools = budgets[args[0]]
+    print(f"{GREEN}✔ effort = {args[0]}{RESET} {GREY}(≤{steps} steps, ≤{tools} tool calls per turn, auto-continues){RESET}")
 
 
 def cmd_auto(args: List[str], agent: "Agent") -> None:
@@ -221,73 +244,259 @@ def cmd_proxy_ui() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Voice
+# ---------------------------------------------------------------------------
+def cmd_voice(args: List[str], ui: Any) -> None:
+    from . import voice
+
+    cfg = config.Config()
+    if not args:
+        state = "on" if voice.enabled() else "off"
+        print(f"{GREY}voice = {MINT}{state}{RESET} {GREY}· accent = {voice.accent()}{RESET}")
+        print(f"{GREY}  /voice on|off · /voice-accent male-british|female-british|male|female · /voice voices{RESET}")
+        return
+    sub = args[0].lower()
+    if sub in ("on", "off"):
+        cfg.set("voice_enabled", sub == "on")
+        if sub == "on":
+            ok = voice.speak("Hello, I am claume. Voice is online.", block=False)
+            print(f"{GREEN}✔ voice on{RESET} " + (f"{GREY}(speaking test ok){RESET}" if ok else f"{GOLD}⚠ no TTS engine found — install pyttsx3 or check Windows voices{RESET}"))
+        else:
+            print(f"{GREEN}✔ voice off{RESET}")
+    elif sub == "voices":
+        names = voice.list_voices()
+        if not names:
+            print(f"{RED}✗ no TTS voices found{RESET}")
+            return
+        print(f"{GREEN}installed voices{RESET}")
+        for n in names:
+            british = " ★ british" if any(f in n.lower() for f in ("george", "hazel", "sonia", "en-gb", "libby", "ryan")) else ""
+            print(f"  {MINT}•{RESET} {n}{GREY}{british}{RESET}")
+        print(f"{GREY}  British voices: Windows Settings → Time & Language → Speech → Add voices (George/Hazel){RESET}")
+    else:
+        print(f"{RED}usage: /voice on|off|voices{RESET}")
+
+
+def cmd_voice_accent(args: List[str]) -> None:
+    from . import voice
+
+    if not args or args[0] not in ("male-british", "female-british", "male", "female"):
+        print(f"{GREY}accent = {MINT}{voice.accent()}{RESET}")
+        print(f"{GREY}  choose: male-british | female-british | male | female{RESET}")
+        return
+    config.Config().set("voice_accent", args[0])
+    print(f"{GREEN}✔ accent = {args[0]}{RESET}")
+    voice.speak("This is my new voice.", block=False)
+
+
+def cmd_say(args: List[str]) -> None:
+    from . import voice
+
+    text = " ".join(args)
+    if not text:
+        print(f"{RED}usage: /say <text>{RESET}")
+        return
+    ok = voice.speak(text, block=True)
+    if not ok:
+        print(f"{RED}✗ voice is off or unavailable — /voice on first{RESET}")
+
+
+def cmd_hear(agent: "Agent") -> None:
+    """One-shot voice command: listen → run as if typed."""
+    from . import voice
+
+    text = voice.hear_command()
+    if not text:
+        return
+    if text.startswith("/"):
+        handle_command(text, agent)
+    else:
+        _run_prompt(text, agent)
+
+
+def _run_prompt(text: str, agent: "Agent") -> None:
+    """Shared prompt pipeline (typed or heard)."""
+    from . import ui as uimod
+    from .ui import BOLD, RESET
+
+    agent.compact_if_needed()
+    final = agent.run_turn(text)
+
+    if final and final != "(no final answer produced)" and final != "(interrupted by user)":
+        print(f"\n{uimod.ACCENT}❯{RESET} {BOLD}{final}{RESET}\n")
+        agent.ui.last_final = final
+        if config.Config().get("auto_copy", True):
+            try:
+                uimod.copy_to_clipboard(final)
+                print(f"{uimod.MUTED}  ⧉ copied to clipboard — /copy to re-copy · /expand for full tool output{RESET}")
+            except Exception:
+                pass
+        from . import voice
+
+        voice.speak(final, block=False)
+    else:
+        print()
+
+
+# ---------------------------------------------------------------------------
+# Copy mode
+# ---------------------------------------------------------------------------
+def cmd_copymode(ui: Any) -> None:
+    from .ui import copy_mode
+
+    copy_mode()
+
+
+# ---------------------------------------------------------------------------
 # Skills
 # ---------------------------------------------------------------------------
 def cmd_skills() -> None:
-    sdir = config.skills_dir()
-    if not sdir.exists():
-        print(f"{GREY}no skills installed — try: /skill anthropics/skills{RESET}")
+    from . import skills as skillsmod
+
+    items = skillsmod.list_skills()
+    if not items:
+        print(f"{GREY}no skills installed — try: {MINT}/skill nextlevelbuilder/ui-ux-pro-max-skill{RESET}")
         return
-    found = sorted(p.name for p in sdir.iterdir() if p.is_dir())
-    if not found:
-        print(f"{GREY}no skills installed{RESET}")
-        return
-    print(f"{GREEN}installed skills ({len(found)}){RESET}")
-    for name in found:
-        print(f"  {MINT}•{RESET} {name}")
+    active_count = sum(1 for s in items if s["active"])
+    print(f"{GREEN}skills{RESET} {GREY}({active_count} active / {len(items)} installed){RESET}")
+    for s in items:
+        status = f"{GREEN}● active{RESET}" if s["active"] else f"{GREY}○ inactive{RESET}"
+        print(f"  {status} {MINT}{s['name']}{RESET} {GREY}· {s['docs']} docs · {s['scripts']} scripts{RESET}")
+        if s["desc"]:
+            print(f"      {GREY}{s['desc']}{RESET}")
+    print(f"{GREY}  /skill-on <name> · /skill-off <name> · /skill-all on · /skill-run <skill> <script>{RESET}")
 
 
 def cmd_skill(args: List[str]) -> None:
+    from . import skills as skillsmod
+
     if not args or "/" not in args[0]:
-        print(f"{RED}usage: /skill owner/repo  (e.g. /skill anthropics/skills){RESET}")
+        print(f"{RED}usage: /skill owner/repo  (e.g. /skill nextlevelbuilder/ui-ux-pro-max-skill){RESET}")
         return
-    repo = args[0]
-    name = repo.split("/")[-1]
-    dest = config.skills_dir() / name
-    if dest.exists():
-        print(f"{GOLD}⚠ {name} exists — re-downloading{RESET}")
-        shutil.rmtree(dest, ignore_errors=True)
-    config.skills_dir().mkdir(parents=True, exist_ok=True)
-    rc = subprocess.call(
-        ["git", "clone", "--depth", "1", f"https://github.com/{repo}", str(dest)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    if rc == 0:
-        count = sum(1 for p in dest.rglob("*.md"))
-        print(f"{GREEN}✔ skill '{name}' installed ({count} markdown files){RESET}")
+    print(f"{GREY}cloning {args[0]}…{RESET}")
+    ok, msg = skillsmod.install_from_github(args[0])
+    print(f"{GREEN}✔ {msg}{RESET}" if ok else f"{RED}✗ {msg}{RESET}")
+    if ok:
+        name = args[0].rstrip("/").split("/")[-1]
+        print(f"{GREY}  activate it: {MINT}/skill-on {name}{RESET} {GREY}· preview: {MINT}/skill-use {name}{RESET}")
+
+
+def cmd_skill_rm(args: List[str]) -> None:
+    from . import skills as skillsmod
+
+    if not args:
+        print(f"{RED}usage: /skill-rm <name>{RESET}")
+        return
+    ok = skillsmod.remove_skill(args[0])
+    if ok:
+        # also drop from active map
+        cfg = config.Config()
+        m = cfg.get("skills_active", {}) or {}
+        m.pop(args[0], None)
+        cfg.set("skills_active", m)
+        print(f"{GREEN}✔ removed {args[0]}{RESET}")
     else:
-        print(f"{RED}✗ git clone failed for {repo}{RESET}")
+        print(f"{RED}✗ '{args[0]}' not installed{RESET}")
+
+
+def cmd_skill_on_off(args: List[str], active: bool) -> None:
+    from . import skills as skillsmod
+
+    if not args:
+        print(f"{RED}usage: /skill-{'on' if active else 'off'} <name>{RESET}")
+        return
+    ok = skillsmod.set_active(args[0], active)
+    if ok:
+        print(f"{GREEN}✔ {args[0]} {'active — its instructions now guide every task' if active else 'inactive'}{RESET}")
+    else:
+        print(f"{RED}✗ '{args[0]}' not installed — /skills to list{RESET}")
+
+
+def cmd_skill_all(args: List[str]) -> None:
+    from . import skills as skillsmod
+
+    active = (args[0].lower() in ("on", "1", "true")) if args else True
+    n = skillsmod.set_all_active(active)
+    print(f"{GREEN}✔ {n} skill(s) {'activated' if active else 'deactivated'}{RESET}")
+
+
+def cmd_skill_use(args: List[str], agent: "Agent") -> None:
+    """Adopt one skill's instructions for the NEXT user turn only."""
+    from . import skills as skillsmod
+
+    if not args:
+        print(f"{RED}usage: /skill-use <name>{RESET}")
+        return
+    text = skillsmod.skill_instructions(args[0])
+    if not text:
+        print(f"{RED}✗ no instructions found for '{args[0]}' — /skills to list{RESET}")
+        return
+    agent.history.append(
+        {
+            "role": "user",
+            "content": (
+                f"SKILL INSTRUCTIONS — '{args[0]}' (apply to the next task, "
+                f"then normal behavior):\n\n{text}\n\n(acknowledge silently and wait for the task)"
+            ),
+        }
+    )
+    print(f"{GREEN}✔ skill '{args[0]}' loaded into the next turn{RESET}")
+
+
+def cmd_skill_run(args: List[str]) -> None:
+    from . import skills as skillsmod
+
+    if len(args) < 2:
+        print(f"{RED}usage: /skill-run <skill> <script> [args…]{RESET}")
+        return
+    out, is_err = skillsmod.run_script(args[0], args[1], args[2:])
+    for line in out.splitlines()[:30]:
+        print(f"  {GREY}│{RESET} {SILVER}{line[:140]}{RESET}" if not is_err else f"  {RED}│{RESET} {line[:140]}{RESET}")
 
 
 # ---------------------------------------------------------------------------
 # MCP
 # ---------------------------------------------------------------------------
 def cmd_mcp() -> None:
-    servers = config.Config().get("mcp_servers", {})
+    from . import mcp as mcpmod
+
+    servers = mcpmod.full_server_map()
     if not servers:
         print(f"{GREY}no MCP servers configured{RESET}")
         print(f"{GREY}  quick start: {MINT}/mcp-preset design{GREY} (21st.dev + reactbits + motion + shadcnspace){RESET}")
         print(f"{GREY}  or: /mcp-add name command args…{RESET}")
         return
-    print(f"{GREEN}MCP servers{RESET}")
+    print(f"{GREEN}MCP servers{RESET} {GREY}({len(servers)}){RESET}")
     for name, spec in sorted(servers.items()):
-        desc = spec.get("description", "") if isinstance(spec, dict) else ""
-        print(f"  {MINT}•{RESET} {name}: {GREY}{spec.get('command', spec) if isinstance(spec, dict) else spec}{RESET}")
-        if desc:
-            print(f"    {GREY}{desc[:90]}{RESET}")
+        if not isinstance(spec, dict):
+            print(f"  {MINT}•{RESET} {name}: {GREY}{spec}{RESET}")
+            continue
+        enabled = spec.get("enabled", True)
+        needs = spec.get("needs_key", "")
+        keyline = f" · needs key {needs}" if needs else ""
+        if not enabled:
+            print(f"  {GREY}○ {name}{RESET} {GREY}disabled · {spec.get('command', '')}{keyline}{RESET}")
+        else:
+            desc = spec.get("description", "")
+            print(f"  {MINT}•{RESET} {name} {GREEN}enabled{RESET} {GREY}· {spec.get('command', '')}{keyline}{RESET}")
+            if desc:
+                print(f"      {GREY}{desc[:90]}{RESET}")
     # Live tool probe (may spawn servers — keep it best effort)
     try:
-        from . import mcp as mcpmod
-
         tools = mcpmod.list_all_tools()
-        live = {k: v for k, v in tools.items() if v and not v[0].startswith("<error")}
-        if live:
-            print(f"{GREEN}live tools{RESET}")
-            for name, tnames in live.items():
+        active = {k: v for k, v in tools.items() if v and not v[0].startswith(("<error", "<disabled"))}
+        disabled = {k: v for k, v in tools.items() if v and v[0] == "<disabled>"}
+        errored = {k: v for k, v in tools.items() if v and v[0].startswith("<error")}
+        if active:
+            print(f"{GREEN}active servers{RESET}")
+            for name, tnames in active.items():
                 shown = ", ".join(tnames[:8])
                 extra = f" … +{len(tnames) - 8}" if len(tnames) > 8 else ""
-                print(f"  {MINT}{name}{RESET} {GREY}({len(tnames)}){RESET}: {shown}{extra}")
+                print(f"  {GREEN}●{RESET} {MINT}{name}{RESET} {GREY}({len(tnames)} tools){RESET}: {shown}{extra}")
+        for name, tnames in errored.items():
+            print(f"  {RED}✗ {name}{RESET} {GREY}{tnames[0][:100]}{RESET}")
+        for name in disabled:
+            print(f"  {GREY}○ {name} disabled{RESET}")
     except Exception as exc:
         print(f"{GREY}  (tool probe unavailable: {exc}){RESET}")
 
@@ -316,6 +525,97 @@ def cmd_mcp_del(args: List[str]) -> None:
         print(f"{GREEN}✔ removed '{args[0]}'{RESET}")
     else:
         print(f"{RED}✗ '{args[0]}' not found{RESET}")
+
+
+def cmd_mcp_on_off(args: List[str], enabled: bool) -> None:
+    from . import mcp as mcpmod
+
+    if not args:
+        print(f"{RED}usage: /mcp-{'on' if enabled else 'off'} <name>{RESET}")
+        return
+    ok = mcpmod.set_enabled(args[0], enabled)
+    if ok:
+        if enabled:
+            print(f"{GREEN}✔ {args[0]} enabled — tools bridge on first use{RESET}")
+        else:
+            print(f"{GREEN}✔ {args[0]} disabled — configured but never spawned{RESET}")
+    else:
+        print(f"{RED}✗ '{args[0]}' not configured — /mcp to list{RESET}")
+
+
+def cmd_mcp_key(args: List[str]) -> None:
+    """/mcp-key <server> — vault the key the server needs (or set needs_key)."""
+    if not args:
+        print(f"{RED}usage: /mcp-key <server> [ENV_VAR_NAME]{RESET}")
+        return
+    server = args[0]
+    cfg = config.Config()
+    servers = cfg.get("mcp_servers", {})
+    if server not in servers:
+        print(f"{RED}✗ '{server}' not configured — /mcp to list{RESET}")
+        return
+    spec = servers[server]
+    env_name = args[1].upper() if len(args) > 1 else (spec.get("needs_key") if isinstance(spec, dict) else None)
+    if not env_name:
+        # Common defaults for known servers
+        guessed = {
+            "uidiscovery-21st": "TWENTY_FIRST_API_KEY",
+            "21st": "TWENTY_FIRST_API_KEY",
+        }.get(server, f"{server.upper().replace('-', '_')}_API_KEY")
+        print(f"{GREY}which env var does {server} need? [default: {guessed}]{RESET}")
+        try:
+            raw = input(f"{GREY}env var name:{RESET} ").strip().upper()
+        except (EOFError, KeyboardInterrupt):
+            return
+        env_name = raw or guessed
+    if isinstance(spec, dict):
+        spec["needs_key"] = env_name
+        servers[server] = spec
+        cfg.set("mcp_servers", servers)
+    # Now vault the value (hidden input)
+    print(f"{GREY}paste the value for {MINT}{env_name}{GREY} (input hidden):{RESET}")
+    import getpass
+
+    value = getpass.getpass("  > ")
+    if value.strip():
+        keyvault.set_key(env_name, value)
+        cfg.set(f"key_vault.{env_name}", True)
+        print(f"{GREEN}✔ {env_name} vaulted and wired to '{server}' — it is injected at spawn, never stored in config{RESET}")
+    else:
+        print(f"{GOLD}⚠ needs_key set to {env_name} — vault the value later with /key {env_name}{RESET}")
+
+
+def cmd_mcp_test(args: List[str]) -> None:
+    """Live handshake probe: ACTIVE / INACTIVE per server (or one)."""
+    from . import mcp as mcpmod
+
+    servers = mcpmod.full_server_map()
+    if args:
+        servers = {k: v for k, v in servers.items() if k == args[0]}
+        if not servers:
+            print(f"{RED}✗ '{args[0]}' not configured{RESET}")
+            return
+    if not servers:
+        print(f"{GREY}no MCP servers configured{RESET}")
+        return
+    print(f"{GREY}probing (handshake + tools/list)…{RESET}")
+    tools = mcpmod.list_all_tools()
+    active_count = 0
+    for name in sorted(servers):
+        tlist = tools.get(name, [])
+        if tlist and tlist[0] == "<disabled>":
+            print(f"  {GREY}○ {name:<28} DISABLED{RESET}")
+        elif tlist and not str(tlist[0]).startswith("<error"):
+            active_count += 1
+            print(f"  {GREEN}● {name:<28} ACTIVE{RESET} {GREY}{len(tlist)} tools{RESET}")
+        else:
+            reason = tlist[0][:80] if tlist else "no response"
+            print(f"  {RED}✗ {name:<28} INACTIVE{RESET} {GREY}{reason}{RESET}")
+    print(f"{GREY}{active_count}/{len(servers)} active · /mcp-on <name> to enable · /mcp-key <name> to add a key{RESET}")
+    try:
+        mcpmod.shutdown_all()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -400,15 +700,70 @@ def cmd_doctor() -> None:
             mcpmod.shutdown_all()
             for name in sorted(servers):
                 tlist = tools.get(name, [])
-                ok = bool(tlist) and not str(tlist[0]).startswith("<error")
-                note = f"{len(tlist)} tools" if ok else str(tlist[0] if tlist else "no tools")[:120]
-                row(f"mcp:{name}", ok, note)
+                spec = servers[name] if isinstance(servers[name], dict) else {}
+                if tlist and tlist[0] == "<disabled>":
+                    row(f"mcp:{name}", False, "disabled (/mcp-on)")
+                else:
+                    ok = bool(tlist) and not str(tlist[0]).startswith("<error")
+                    note = f"{len(tlist)} tools" if ok else str(tlist[0] if tlist else "no tools")[:120]
+                    row(f"mcp:{name}", ok, note)
         except Exception as exc:
             row("mcp probe", False, str(exc)[:120])
     else:
         print(f"│ {GREY}no MCP servers configured — /mcp-preset design{RESET}")
 
     print(f"{GREY}tip: run /proxy if the proxy row shows ✗{RESET}")
+
+
+def cmd_reinstall() -> None:
+    """In-place repair: re-run the installer logic without losing config."""
+    print(f"{GREEN}reinstalling claume (config, vault and skills are kept){RESET}")
+    app_dir = Path(__file__).resolve().parent.parent
+    is_git_checkout = (app_dir / ".git").exists()
+
+    # 1) Try git pull for git checkouts
+    if is_git_checkout:
+        try:
+            rc = subprocess.call(["git", "pull", "--ff-only"], cwd=app_dir)
+            if rc == 0:
+                print(f"{GREEN}✔ source updated via git pull{RESET}")
+        except Exception as exc:
+            print(f"{GOLD}⚠ git pull failed: {exc}{RESET}")
+
+    # 2) Re-install the package into the active environment (pip fallback)
+    print(f"{GREY}re-installing package…{RESET}")
+    py = sys.executable
+    try:
+        rc = subprocess.call([py, "-m", "pip", "install", "-e", str(app_dir), "--quiet"])
+        if rc != 0:
+            rc = subprocess.call([py, "-m", "pip", "install", str(app_dir), "--quiet", "--force-reinstall", "--no-deps"])
+    except Exception as exc:
+        rc = 1
+        print(f"{GOLD}⚠ pip reinstall failed: {exc}{RESET}")
+    if rc == 0:
+        print(f"{GREEN}✔ package re-installed{RESET}")
+
+    # 3) Verify the console script works
+    try:
+        out = subprocess.run(
+            [py, "-c", "import claume; print(claume.__version__)"],
+            capture_output=True, text=True, timeout=30,
+        )
+        ver = (out.stdout or "").strip()
+        if out.returncode == 0 and ver:
+            print(f"{GREEN}✔ claume imports cleanly (v{ver}){RESET}")
+        else:
+            err = (out.stderr or "unknown error").strip()[:200]
+            print(f"{RED}✗ import check failed: {err}{RESET}")
+    except Exception as exc:
+        print(f"{RED}✗ verification failed: {exc}{RESET}")
+
+    # 4) Sanity-check dirs and vault
+    config.claume_dir().mkdir(parents=True, exist_ok=True)
+    config.skills_dir().mkdir(parents=True, exist_ok=True)
+    config.sessions_dir().mkdir(parents=True, exist_ok=True)
+    print(f"{GREEN}✔ directories verified: {config.claume_dir()}{RESET}")
+    print(f"{GREY}  restart claume to complete the repair · /doctor for a full health check{RESET}")
 
 
 def cmd_update() -> None:
@@ -512,7 +867,7 @@ def cmd_copy(args: List[str], ui: "Any") -> None:
 
 
 def cmd_mascot(ui: "Any") -> None:
-    ui.mascot.show(mood="happy", note="at your service")
+    ui.mascot.show(mood="happy", note="eyes follow your mouse 👀")
 
 
 def cmd_projects(args: List[str], agent: "Agent") -> None:
@@ -588,7 +943,55 @@ def cmd_session(args: List[str], agent: "Agent") -> None:
     if sessions_list:
         print(f"{GREY}recent:{RESET}")
         for s in sessions_list:
-            print(f"  {MINT}{s['id']}{RESET} {GREY}· {s['turns']} turns · {s['title']}{RESET}")
+            label = s["name"] or s["title"]
+            print(f"  {MINT}{s['id']}{RESET} {GREY}· {s['project']} · {s['when']} · {s['turns']} turns · {label}{RESET}")
+
+
+def cmd_sessions(args: List[str], agent: "Agent") -> None:
+    """Rich session list: project name + time, grouped by project."""
+    from . import sessions
+
+    entries = sessions.list_sessions(limit=20)
+    if not entries:
+        print(f"{GREY}no saved sessions yet{RESET}")
+        return
+    print(f"{GREEN}sessions{RESET} {GREY}(newest first · rename with /rename){RESET}")
+    by_project: Dict[str, List[dict]] = {}
+    for s in entries:
+        by_project.setdefault(s["project"], []).append(s)
+    for project in sorted(by_project):
+        print(f"\n  {MINT}{project}{RESET}")
+        for s in by_project[project]:
+            cur = " ← current" if s["id"] == agent.session_id else ""
+            label = s["name"] or s["title"]
+            print(f"    {MINT}{s['id']}{RESET} {GREY}{s['when']} · {s['turns']} turns{RESET} {label}{GREY}{cur}{RESET}")
+
+
+def cmd_rename(args: List[str], agent: "Agent") -> None:
+    """Usage: /rename <project> [name]  |  /rename - <id> <project> [name]"""
+    from . import sessions
+
+    if not args:
+        print(f"{RED}usage: /rename <project> [name]   — renames the CURRENT session{RESET}")
+        print(f"{GREY}       /rename - <id> <project> [name] — renames a specific session{RESET}")
+        return
+    if args[0] == "-":
+        if len(args) < 3:
+            print(f"{RED}usage: /rename - <id> <project> [name]{RESET}")
+            return
+        sid, project = args[1], args[2]
+        name = " ".join(args[3:]) or None
+    else:
+        if not agent.session_id:
+            print(f"{RED}✗ no current session{RESET}")
+            return
+        sid, project = agent.session_id, args[0]
+        name = " ".join(args[1:]) or None
+    ok = sessions.rename_session(sid, project=project, name=name or "")
+    if ok:
+        print(f"{GREEN}✔ session {sid} → project '{project}'" + (f", name '{name}'" if name else "") + f"{RESET}")
+    else:
+        print(f"{RED}✗ session '{sid}' not found{RESET}")
 
 
 def cmd_resume(args: List[str], agent: "Agent") -> None:
@@ -598,9 +1001,10 @@ def cmd_resume(args: List[str], agent: "Agent") -> None:
     if not entries:
         print(f"{GREY}no saved sessions yet{RESET}")
         return
-    print(f"{GREEN}saved sessions{RESET}")
+    print(f"{GREEN}saved sessions{RESET} {GREY}(project · time){RESET}")
     for i, s in enumerate(entries, 1):
-        print(f"  {MINT}{i:>2}{RESET}. {s['id']}  {GREY}{s['title']}{RESET}")
+        label = s["name"] or s["title"]
+        print(f"  {MINT}{i:>2}{RESET}. {s['id']}  {GREY}{s['project']} · {s['when']}{RESET} {label}")
     try:
         raw = input(f"{GREY}resume # (enter to cancel):{RESET} ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -634,10 +1038,11 @@ def cmd_continue(args: List[str], agent: "Agent") -> None:
     agent.session_id = sid
     agent.history = list(data.get("messages", []))
     agent.step = 0
+    meta_project = data.get("project", "")
     title = " ".join(
         next((m["content"] for m in agent.history if m.get("role") == "user"), "")[:70].split()
     )
-    print(f"{GREEN}✔ continued session {sid}{RESET} {GREY}· {title}{RESET}")
+    print(f"{GREEN}✔ continued session {sid}{RESET} {GREY}· {meta_project} · {title}{RESET}")
 
 
 def cmd_agents(args: List[str], agent: "Agent") -> None:
@@ -688,7 +1093,7 @@ def cmd_design(args: List[str], agent: "Agent") -> None:
                 "content": (
                     f"DESIGN PIPELINE OUTPUT for '{request}':\n{report[:8000]}\n\n"
                     "Use these blueprints/blocks/motion specs to build the UI now. "
-                    "No generic placeholder divs." 
+                    "No generic placeholder divs."
                 ),
             }
         )
@@ -716,6 +1121,7 @@ def cmd_mcp_preset(args: List[str]) -> None:
     if added:
         print(f"{GREEN}✔ installed preset '{args[0]}': {', '.join(added)}{RESET}")
         print(f"{GREY}  tools bridge automatically on first use — try /design <prompt>{RESET}")
+        print(f"{GREY}  need a key? {MINT}/mcp-key <server>{RESET} · check status: {MINT}/mcp-test{RESET}")
     else:
         print(f"{GREY}nothing to add{RESET}")
 
@@ -740,7 +1146,7 @@ def handle_command(line: str, agent: "Agent") -> bool:
     elif name == "model":
         cmd_model(args)
     elif name == "effort":
-        cmd_effort(args)
+        cmd_effort(args, agent)
     elif name == "auto":
         cmd_auto(args, agent)
     elif name == "mode":
@@ -751,8 +1157,18 @@ def handle_command(line: str, agent: "Agent") -> bool:
         cmd_expand(args, agent.ui)
     elif name == "copy":
         cmd_copy(args, agent.ui)
+    elif name == "copymode":
+        cmd_copymode(agent.ui)
     elif name == "mascot":
         cmd_mascot(agent.ui)
+    elif name == "voice":
+        cmd_voice(args, agent.ui)
+    elif name == "voice-accent":
+        cmd_voice_accent(args)
+    elif name == "say":
+        cmd_say(args)
+    elif name == "hear":
+        cmd_hear(agent)
     elif name == "projects":
         cmd_projects(args, agent)
     elif name == "project":
@@ -761,6 +1177,10 @@ def handle_command(line: str, agent: "Agent") -> bool:
         cmd_repo(args, agent)
     elif name == "session":
         cmd_session(args, agent)
+    elif name == "sessions":
+        cmd_sessions(args, agent)
+    elif name == "rename":
+        cmd_rename(args, agent)
     elif name == "resume":
         cmd_resume(args, agent)
     elif name == "continue":
@@ -787,18 +1207,40 @@ def handle_command(line: str, agent: "Agent") -> bool:
         cmd_skills()
     elif name == "skill":
         cmd_skill(args)
+    elif name == "skill-rm":
+        cmd_skill_rm(args)
+    elif name == "skill-on":
+        cmd_skill_on_off(args, True)
+    elif name == "skill-off":
+        cmd_skill_on_off(args, False)
+    elif name == "skill-all":
+        cmd_skill_all(args)
+    elif name == "skill-use":
+        cmd_skill_use(args, agent)
+    elif name == "skill-run":
+        cmd_skill_run(args)
     elif name == "mcp":
         cmd_mcp()
     elif name == "mcp-add":
         cmd_mcp_add(args)
     elif name == "mcp-del":
         cmd_mcp_del(args)
+    elif name == "mcp-on":
+        cmd_mcp_on_off(args, True)
+    elif name == "mcp-off":
+        cmd_mcp_on_off(args, False)
+    elif name == "mcp-key":
+        cmd_mcp_key(args)
+    elif name == "mcp-test":
+        cmd_mcp_test(args)
     elif name == "md":
         cmd_md(args, agent.workspace)
     elif name == "config":
         cmd_config()
     elif name == "doctor":
         cmd_doctor()
+    elif name == "reinstall":
+        cmd_reinstall()
     elif name == "update":
         cmd_update()
     elif name == "recommend":

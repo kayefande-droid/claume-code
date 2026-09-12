@@ -86,6 +86,7 @@ class Config:
         "provider": "nvidia",
         "model": "nvidia/nemotron-3-super-120b-a12b",
         "model_fallbacks": [],
+        # effort: fast | balanced | deep | ultra (drives step budgets + tokens)
         "effort": "balanced",
         # Permission mode: manual | accept | plan | auto (like Claude Code)
         "mode": "manual",
@@ -109,7 +110,16 @@ class Config:
         # Terminal UX
         "expand_output": False,
         "auto_copy": True,
+        "input_box": True,          # Freebuff-style bordered input box
+        "mouse_mascot": True,       # mascot eyes follow the mouse cursor
+        # Voice (/voice on) — British male/female SAPI voices
+        "voice_enabled": False,
+        "voice_accent": "male-british",   # male-british | female-british | male | female
+        "voice_listen_timeout": 6,
+        "voice_lang": "en-GB",
         "mcp_servers": {},
+        # Skills (github instruction packs)
+        "skills_active": {},   # {skill_name: bool}
         # Subagents
         "subagent_max_steps": 14,
         "subagent_max_tool_calls": 24,
@@ -177,7 +187,8 @@ class Config:
 
     @property
     def effort(self) -> str:
-        return str(self.get("effort"))
+        e = str(self.get("effort", "balanced"))
+        return e if e in ("fast", "balanced", "deep", "ultra") else "balanced"
 
     @property
     def mode(self) -> str:

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -132,9 +134,10 @@ def _resume_flag_sessions(argv: List[str], agent: Agent) -> None:
         if not entries:
             print(f"{_ui.GREY}no saved sessions{RESET}")
             return
-        print(f"{_ui.ACCENT}saved sessions{RESET}")
+        print(f"{_ui.ACCENT}saved sessions{RESET} {_ui.GREY}(project · time){RESET}")
         for n, s in enumerate(entries, 1):
-            print(f"  {_ui.MINT}{n:>2}{RESET}. {s['id']}  {_ui.GREY}{s['title']}{RESET}")
+            label = s["name"] or s["title"]
+            print(f"  {_ui.MINT}{n:>2}{RESET}. {s['id']}  {_ui.GREY}{s['project']} · {s['when']}{RESET} {label}")
         try:
             raw = input(f"{_ui.GREY}resume #: {RESET}").strip()
         except (EOFError, KeyboardInterrupt):
@@ -146,6 +149,34 @@ def _resume_flag_sessions(argv: List[str], agent: Agent) -> None:
                 agent.session_id = sid
                 agent.history = list(data.get("messages", []))
                 print(f"{_ui.ACCENT}✔ resumed {sid}{RESET}")
+
+
+class _Shimmer:
+    """Background '✻ thinking… Ns' ticker while the model streams."""
+
+    def __init__(self, ui: UI) -> None:
+        self.ui = ui
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self.ui.quiet:
+            return
+        self.ui.thought_stream_start()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        i = 0
+        while not self._stop.wait(0.45):
+            self.ui.thought_stream_tick(i)
+            i += 1
+
+    def stop(self, thought: str = "") -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.5)
+        self.ui.thought_stream_end(thought)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -178,7 +209,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # pixel bot greets you
     if not quiet:
-        ui.mascot.show(mood="idle", note="type a task, or /help")
+        ui.mascot.show(mood="idle", note="type a task, /hear to speak, or /help")
 
     _first_run_setup()
     _ensure_nvidia_key_interactive()
@@ -188,12 +219,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     agent = Agent(workspace=workspace, ui=ui, confirm_fn=ui.confirm)
 
-    # Sessions: flags first, else fresh autosaved session
+    # Sessions: flags first, else fresh autosaved session (named by project)
     _resume_flag_sessions(argv, agent)
     if agent.session_id is None:
         agent.session_id = sessions.start_new()
         if not quiet:
-            print(f"{_ui.GREY}  session{RESET} {_ui.MINT}{agent.session_id}{RESET} {_ui.GREY}(autosaved · /resume to revisit){RESET}")
+            project = sessions.default_project_name()
+            print(f"{_ui.GREY}  session{RESET} {_ui.MINT}{agent.session_id}{RESET} {_ui.GREY}· project '{project}' (autosaved · /rename to name it · /sessions to browse){RESET}")
 
     # Instruction .md auto-load
     md_note = commands.load_instruction_md(workspace)
@@ -202,10 +234,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"{_ui.GREY}  loaded project instructions from CLAUUME.md/CLAUDE.md{RESET}\n")
 
     from . import llm  # late import keeps startup snappy
+    from . import voice  # late import: optional engines
+
+    use_input_box = bool(config.Config().get("input_box", True)) and not quiet
 
     while True:
+        # --- Freebuff-style input box -------------------------------
+        if use_input_box:
+            session_label = ""
+            try:
+                if agent.session_id:
+                    data = sessions.load_session(agent.session_id)
+                    if data:
+                        session_label = data.get("project") or ""
+            except Exception:
+                session_label = ""
+            _ui.input_box_top(config.Config().mode, session_label)
+            prompt = _ui.input_box_prompt()
+        else:
+            prompt = ui.prompt_symbol()
+
         try:
-            line = input(ui.prompt_symbol()).strip()
+            line = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             # First ctrl+c during input: hint instead of quitting (Claude-Code-like)
             print(f"\n{_ui.GREY}press ctrl+c again or /exit to quit · Shift+Tab to change mode{RESET}")
@@ -213,7 +263,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 line = input(ui.prompt_symbol()).strip()
             except (EOFError, KeyboardInterrupt):
                 print(f"\n{_ui.GREY}bye ✦{RESET}")
+                voice.wait_until_done(timeout=3)
                 return 0
+        finally:
+            if use_input_box:
+                _ui.input_box_bottom()
 
         if not line:
             continue
@@ -228,17 +282,32 @@ def main(argv: Optional[List[str]] = None) -> int:
                 commands.handle_command(line, agent)
             except SystemExit:
                 print(f"{_ui.GREY}bye ✦{RESET}")
+                voice.wait_until_done(timeout=3)
                 return 0
             except Exception as exc:
                 ui.render_error(f"command failed: {exc}")
             continue
 
-        # Regular user prompt → agent turn
-        agent.compact_if_needed()
-        final = agent.run_turn(line)
+        # Regular user prompt → agent turn (animated thinking shimmer)
+        shimmer = _Shimmer(ui)
+        try:
+            shimmer.start()
+            final = agent.run_turn(line)
+        finally:
+            thought = ""
+            try:
+                last_assistant = next(
+                    (m["content"] for m in reversed(agent.history) if m.get("role") == "assistant"),
+                    "",
+                )
+                thought = last_assistant[:70]
+            except Exception:
+                thought = ""
+            shimmer.stop(thought)
+
         uimod = _ui  # live theme constants (survive /theme switches)
 
-        if final and final != "(no final answer produced)":
+        if final and final not in ("(no final answer produced)", "(interrupted by user)"):
             print(f"\n{uimod.ACCENT}❯{RESET} {BOLD}{final}{RESET}\n")
             ui.last_final = final
             # auto-copy final answers to clipboard
@@ -249,6 +318,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"{uimod.MUTED}  ⧉ copied to clipboard — /copy to re-copy · /expand for full tool output{RESET}")
                 except Exception:
                     pass
+            # AI voice response (only when /voice on)
+            voice.speak(final, block=False)
         else:
             print()
 

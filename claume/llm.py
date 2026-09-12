@@ -131,6 +131,7 @@ def stream_chat(
         "fast": (1024, 0.4),
         "balanced": (4096, 0.2),
         "deep": (8192, 0.1),
+        "ultra": (16_384, 0.05),
     }
     max_tokens, temperature = effort_map.get(effort, (4096, 0.2))
 

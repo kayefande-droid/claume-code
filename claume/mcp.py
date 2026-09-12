@@ -243,7 +243,40 @@ def _servers_from_config() -> Dict[str, Dict[str, Any]]:
     from . import config as cfgmod
 
     servers = cfgmod.Config().get("mcp_servers", {})
+    servers = servers if isinstance(servers, dict) else {}
+    # Disabled servers are excluded from bridging/probing entirely.
+    return {
+        name: spec
+        for name, spec in servers.items()
+        if not isinstance(spec, dict) or spec.get("enabled", True)
+    }
+
+
+def full_server_map() -> Dict[str, Dict[str, Any]]:
+    """All configured servers including disabled ones (for /mcp display)."""
+    from . import config as cfgmod
+
+    servers = cfgmod.Config().get("mcp_servers", {})
     return servers if isinstance(servers, dict) else {}
+
+
+def set_enabled(name: str, enabled: bool) -> bool:
+    """Enable/disable a configured server. Returns True if it existed."""
+    from . import config as cfgmod
+
+    cfg = cfgmod.Config()
+    servers = cfg.get("mcp_servers", {})
+    if name not in servers:
+        return False
+    spec = servers[name]
+    if isinstance(spec, dict):
+        spec["enabled"] = enabled
+    else:
+        servers[name] = {"command": str(spec), "enabled": enabled}
+    cfg.set("mcp_servers", servers)
+    # Drop any cached process so the next use re-initializes cleanly.
+    _processes.pop(name, None)
+    return True
 
 
 def get_server(name: str) -> MCPServer:
@@ -266,9 +299,17 @@ def call_tool(server: str, tool: str, args: Dict[str, Any]) -> str:
 
 
 def list_all_tools() -> Dict[str, List[str]]:
-    """Probe every configured server; returns {server: [tool,...]}."""
+    """Probe every configured+enabled server; returns {server: [tool,...]}.
+
+    Disabled servers are listed with a '<disabled>' marker so /mcp can
+    show enabled/disabled state side by side.
+    """
     out: Dict[str, List[str]] = {}
-    for name in _servers_from_config():
+    all_servers = full_server_map()
+    for name, spec in all_servers.items():
+        if isinstance(spec, dict) and not spec.get("enabled", True):
+            out[name] = ["<disabled>"]
+            continue
         try:
             srv = get_server(name)
             out[name] = [t.get("name", "?") for t in srv.list_tools()]
