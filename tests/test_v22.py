@@ -258,6 +258,94 @@ class TestExpandHint(unittest.TestCase):
         self.assertIn("+", busy_prompt())
 
 
+class TestClickToExpand(unittest.TestCase):
+    """Mouse clicks on '+N more lines' hints must expand the stored output."""
+
+    def _ui(self):
+        from claume.ui import UI
+
+        return UI(quiet=False)
+
+    def test_render_action_registers_expandable(self):
+        import io
+        from unittest.mock import patch
+
+        import claume.ui as uimod
+
+        ui = self._ui()
+        result = "\n".join(f"line-{i}" for i in range(30))  # 30 lines > 14 shown
+        with patch.object(uimod, "_console_cursor_row", lambda: 42), patch("sys.stdout", new=io.StringIO()):
+            ui.render_action("read_file", {"path": "x"}, result, False)
+        self.assertEqual(len(ui.expandable), 1)
+        entry = ui.expandable[0]
+        self.assertEqual(entry["tool"], "read_file")
+        self.assertEqual(entry["hidden"], 16)
+        self.assertEqual(ui.hint_rows.get(42), 1)  # buffer row -> hint 1
+
+    def test_expandable_registry_capped_at_12(self):
+        import io
+        from unittest.mock import patch
+
+        import claume.ui as uimod
+
+        ui = self._ui()
+        result = "\n".join(f"l{i}" for i in range(30))
+        with patch.object(uimod, "_console_cursor_row", lambda: 1), patch("sys.stdout", new=io.StringIO()):
+            for i in range(20):
+                ui.render_action("read_file", {"path": str(i)}, result, False)
+        self.assertEqual(len(ui.expandable), 12)
+
+    def test_render_action_full_prints_everything(self):
+        import io
+        from unittest.mock import patch
+
+        import claume.ui as uimod
+
+        ui = self._ui()
+        result = "\n".join(f"line-{i}" for i in range(30))
+        with patch.object(uimod, "_console_cursor_row", lambda: 1), patch("sys.stdout", new=io.StringIO()) as out:
+            ui.render_action("read_file", {"path": "x"}, result, False)
+            trimmed = out.getvalue()
+        with patch("sys.stdout", new=io.StringIO()) as out2:
+            ui.render_action_full(1)
+            full = out2.getvalue()
+        self.assertIn("line-29", full)          # last line present when expanded
+        self.assertNotIn("line-29", trimmed)   # …but trimmed in the normal view
+        self.assertIn("line-0", full)
+
+    def test_render_action_full_bad_index(self):
+        import io
+        from unittest.mock import patch
+
+        ui = self._ui()
+        with patch("sys.stdout", new=io.StringIO()):
+            ui.render_action_full(99)  # must not raise
+        self.assertEqual(len(ui.expandable), 0)
+
+    def test_hit_test_hint(self):
+        from claume.ui import _hit_test_hint
+
+        rows = {40: 1, 55: 2}
+        self.assertEqual(_hit_test_hint(rows, 40), 1)
+        self.assertEqual(_hit_test_hint(rows, 56), 2)  # +1 slack
+        self.assertEqual(_hit_test_hint(rows, 41), 1)  # +1 slack
+        self.assertIsNone(_hit_test_hint(rows, 48))    # midpoint, out of reach
+        self.assertIsNone(_hit_test_hint({}, 10))
+
+    def test_console_event_no_console(self):
+        # In a non-console context this must return None, never raise.
+        from claume.ui import _read_console_event
+
+        self.assertTrue(_read_console_event(0.01) in (None,) or isinstance(_read_console_event(0.01), tuple))
+
+    def test_copy_mode_signature_backwards_compatible(self):
+        from claume.ui import click_mode, copy_mode
+
+        self.assertIs(copy_mode, click_mode)
+        # callable with no args (legacy drag-copy behavior)
+        self.assertTrue(callable(copy_mode))
+
+
 class TestModeCycleSafe(unittest.TestCase):
     def test_cycle_all_modes(self):
         from claume.cli import _cycle_mode

@@ -34,7 +34,7 @@ HELP_LINES = [
     f"  {MINT}/theme{RESET} [name]     color theme: nvidia-green, claude-orange, cyber-blue, synthwave, matrix, sunset, mono",
     f"  {MINT}/expand{RESET} [on|off]  show full tool output (default: 14 lines)",
     f"  {MINT}/copy{RESET} [text]      copy the last answer (or given text) to clipboard",
-    f"  {MINT}/copymode{RESET}         click-and-pull copy: drag-select text → clipboard",
+    f"  {MINT}/copymode{RESET}         click mode: mouse-click a ‘+N more lines’ hint to expand it · drag to copy",
     f"  {MINT}/ask{RESET} <question>    side question — answered mid-task without hindering it",
     f"  {MINT}/skip{RESET}              interrupt the running task (queue stays live)",
     f"  {MINT}/queue{RESET}             explain the live task queue",
@@ -345,9 +345,11 @@ def _run_prompt(text: str, agent: "Agent") -> None:
 # Copy mode
 # ---------------------------------------------------------------------------
 def cmd_copymode(ui: Any) -> None:
+    """Click mode: real mouse clicks on '+N more lines' hints expand that
+    tool's full output inline; drag-select pulls text into the clipboard."""
     from .ui import copy_mode
 
-    copy_mode()
+    copy_mode(ui)
 
 
 # ---------------------------------------------------------------------------

@@ -439,20 +439,24 @@ def input_box_bottom() -> None:
 
 
 # --------------------------------------------------------------------------
-# Click-and-pull copy mode: drag-select → clipboard (Windows)
+# Click mode: real mouse clicks on '+N more lines' hints + drag-pull copy
 # --------------------------------------------------------------------------
-def copy_mode() -> None:
-    """Interactive copy helper: on Windows, watches for a left-button
-    drag; when the drag ends, reads whatever text the terminal put on the
-    clipboard (Windows Terminal copies on select with the right settings,
-    and ctrl+shift+c always works) and re-copies via claume so /copy and
-    paste work everywhere. Enter or ctrl+c exits.
-    """
-    from .ui import ACCENT, BOLD, MUTED, RESET
+def copy_mode(ui: Optional[Any] = None) -> None:
+    """Interactive mouse mode (Windows console events):\n
+    * **Click a `… +N more lines` hint** → that tool's full output expands
+      inline (via the on_expand callback, typically /expand rerun).
+    * **Drag-select text** → lands in the clipboard (pull-copy), announced
+      with a preview.
+    * **Esc / ctrl+c / Enter** → exits; console mode is always restored.
 
-    print(f"{ACCENT}⧉ copy mode{RESET} {MUTED}— drag to select text, then release · Enter to exit{RESET}")
+    ``ui`` (optional): the UI instance carrying the expand registry
+    (ui.expandable, ui.hint_rows, ui.render_action_full). Without it the
+    mode is pure drag-copy, exactly like the original behavior.
+    """
+    from .ui import ACCENT, GOLD, MUTED, RESET
+
     if os.name != "nt":
-        print(f"{MUTED}  (use your terminal's native selection · press Enter to exit){RESET}")
+        print(f"{ACCENT}⧉ copy mode{RESET} {MUTED}— use your terminal's native selection · Enter exits{RESET}")
         try:
             input()
         except (EOFError, KeyboardInterrupt):
@@ -460,25 +464,79 @@ def copy_mode() -> None:
         print(f"{MUTED}copy mode off{RESET}")
         return
 
-    import ctypes
+    # Live registry references — a background task may append entries while
+    # this mode is open, so never work from a stale snapshot.
+    expandable_ref = getattr(ui, "expandable", None) if ui else None
+    n_expandable = len(expandable_ref) if expandable_ref else 0
+    if n_expandable:
+        print(f"{ACCENT}⧉ click mode{RESET} {MUTED}— click a ‘+N more lines’ hint to expand it · drag to copy · Esc exits{RESET}")
+        print(f"{MUTED}  ({n_expandable} expandable output(s) on screen){RESET}")
+    else:
+        print(f"{ACCENT}⧉ copy mode{RESET} {MUTED}— drag to select text to copy · Esc exits{RESET}")
 
-    user32 = ctypes.windll.user32
+    old_mode = _set_mouse_mode(True)
+    if old_mode is None:
+        print(f"{GOLD}⚠ console mouse events unavailable — drag-copy still works via your terminal{RESET}")
+    user32 = None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+    except Exception:
+        pass
+
+    def _do_expand(idx: int) -> None:
+        if ui is None:
+            return
+        info = ui.expandable[idx - 1] if 0 < idx <= len(ui.expandable) else None
+        if info:
+            print(f"{ACCENT}⧉ {info['tool']}{RESET} {MUTED}· full output (+{info['hidden']} lines):{RESET}")
+        try:
+            ui.render_action_full(idx)
+        except Exception as exc:
+            print(f"{GOLD}⚠ expand failed: {exc}{RESET}")
+
     last_clip = _read_clipboard_text()
-    print(f"{MUTED}  waiting for a drag-selection…{RESET}")
+    drag_anchor = None  # screen pos where the left button went down
+
     try:
         while True:
-            # Enter pressed?
-            if user32.GetAsyncKeyState(0x0D) & 1:
-                break
-            # Left button currently down?
-            if user32.GetAsyncKeyState(0x01) & 0x8000:
-                start = _cursor_pos()
-                # wait for release
-                while user32.GetAsyncKeyState(0x01) & 0x8000:
-                    time.sleep(0.05)
-                end = _cursor_pos()
-                time.sleep(0.15)  # let the terminal update its selection
-                if start and end and (abs(start[0] - end[0]) + abs(start[1] - end[1])) > 6:
+            ev = _read_console_event(timeout=0.05)
+            if ev is None:
+                # Fallback: respect the native Enter-to-exit even if the
+                # console record stream is unavailable.
+                if user32 is not None and user32.GetAsyncKeyState(0x0D) & 1:
+                    break
+                continue
+
+            kind = ev[0]
+
+            if kind == "key":
+                _, vk, down = ev
+                # ESC (0x1B) or Enter (0x0D) on key-down exits.
+                if down and vk in (0x1B, 0x0D):
+                    break
+                continue
+
+            _, x, y, left_down, flags = ev
+
+            if flags == 0 and left_down:  # fresh press (no move/double-click flag)
+                # 1) hint hit-test: click's buffer row matches a hint row?
+                #    (live rows — a background task may have shifted them)
+                hint_idx = _hit_test_hint(getattr(ui, "hint_rows", {}) or {}, y) if ui else None
+                if hint_idx is not None and expandable_ref and 0 < hint_idx <= len(expandable_ref):
+                    info = expandable_ref[hint_idx - 1]
+                    print(f"{ACCENT}⧉ expanding {info['tool']}{RESET} {MUTED}(+{info['hidden']} lines){RESET}")
+                    _do_expand(hint_idx)
+                    drag_anchor = None
+                else:
+                    drag_anchor = (x, y)
+            elif flags == 0 and not left_down and drag_anchor is not None:
+                # release after a real drag → pull the selection text
+                dragged = abs(x - drag_anchor[0]) + abs(y - drag_anchor[1])
+                drag_anchor = None
+                if dragged > 6:
+                    time.sleep(0.15)  # let the terminal land its selection
                     sel = _read_clipboard_text()
                     if sel and sel != last_clip:
                         last_clip = sel
@@ -486,13 +544,36 @@ def copy_mode() -> None:
                         print(f"{ACCENT}  ⧉ pulled {len(sel)} chars:{RESET} {preview}…")
                     else:
                         print(
-                            f"{MUTED}  selection detected — if your terminal didn't copy "
-                            f"it, press ctrl+shift+c then it lands in the clipboard{RESET}"
+                            f"{MUTED}  selection captured — if your terminal didn't copy it, "
+                            f"press ctrl+shift+c (or right-click) and it lands in the clipboard{RESET}"
                         )
-            time.sleep(0.05)
+            # mouse-move events (flags == 1) are ignored
     except KeyboardInterrupt:
         pass
+    finally:
+        if old_mode is not None:
+            _set_mouse_mode(False, old_mode)
     print(f"{MUTED}copy mode off{RESET}")
+
+
+# Alias so both names read well at the call site.
+click_mode = copy_mode
+
+
+def _hit_test_hint(hint_rows: Dict[int, int], row: int) -> Optional[int]:
+    """Map a click's buffer row to a 1-based hint index (or None).
+
+    ``hint_rows`` maps buffer ROW → hint index; distance is measured from
+    the keys (rows). ±1 row slack absorbs soft-wrapped hint lines.
+    """
+    if not hint_rows:
+        return None
+    best, best_dist = None, 2
+    for hint_row, idx in hint_rows.items():
+        d = abs(int(hint_row) - int(row))
+        if d < best_dist:
+            best, best_dist = idx, d
+    return best
 
 
 def _cursor_pos() -> Optional[tuple]:
@@ -736,75 +817,186 @@ def _strip_ansi(line: str) -> str:
 def expand_hint(tool: str, hidden: int, expandable_ref: Optional[List[dict]] = None) -> str:
     """Render the '+N more lines' hint as a clickable OSC 8 hyperlink.
 
-    In supported terminals (Windows Terminal, iTerm…) clicking it fires a
-    mouse event the REPL routes to /expand for that tool call. Falls back
-    gracefully to a plain hint elsewhere.
+    ``expandable_ref`` is accepted for backwards compatibility but is
+    intentionally left unmodified: registration is owned by
+    ``UI.render_action`` (single source of truth), so the click row and
+    the registry entry always refer to the same tool call. Falls back
+    gracefully to a plain hint in terminals without color.
     """
     text = f"… +{hidden} more lines — /expand for full output"
     if expandable_ref is None or not COLOR:
         return f"\033[38;5;245m{text}\033[0m"
-    expandable_ref.append({"tool": tool, "hidden": hidden})
-    idx = len(expandable_ref)  # 1-based id
-    url = f"claume://expand/{idx}"
+    url = "claume://expand/hint"
     return (
-        f"\033]8;line={idx};{url}\033\\\033[38;5;245m{text}\033[0m\033]8;;\033\\"
+        f"\033]8;line=hint;{url}\033\\\033[38;5;245m{text}\033[0m\033]8;;\033\\"
     )
 
 
-def handle_click(x: int, y: int, expandable_ref: Optional[List[dict]] = None) -> Optional[str]:
-    """Route a terminal mouse click. Returns an action string or None.
+# --------------------------------------------------------------------------
+# Real mouse clicks on expand hints (Windows console INPUT_RECORD events)
+# --------------------------------------------------------------------------
+# QuickEdit must be off for conhost to deliver mouse events; restored on exit.
+_ENABLE_MOUSE_INPUT = 0x0010
+_ENABLE_WINDOW_INPUT = 0x0008
+_ENABLE_QUICK_EDIT_MODE = 0x0040
+_ENABLE_EXTENDED_FLAGS = 0x0080
 
-    Recognizes clicks on '+N more lines' hint lines (OSC 8 line= anchors
-    emitted by expand_hint). Pure Python — no mouse-mode escape codes,
-    so typing is never affected.
+
+def _console_cursor_row() -> Optional[int]:
+    """Absolute cursor row in the screen BUFFER (scrollback-aware).
+
+    Buffer coordinates survive scrolling, so a hint's row stays valid even
+    after more output pushes it up. None when unavailable (non-Windows).
     """
-    if not expandable_ref:
+    if os.name != "nt":
         return None
-    col, row = _read_click()
-    if row is None:
-        return None
-    if col is not None and 0 < col <= len(expandable_ref):
-        return "/expand"
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class COORD_(ctypes.Structure):
+            _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+
+        class SMALL_RECT_(ctypes.Structure):
+            _fields_ = [("L", ctypes.c_short), ("T", ctypes.c_short),
+                        ("R", ctypes.c_short), ("B", ctypes.c_short)]
+
+        class CSBI(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", COORD_),
+                ("dwCursorPosition", COORD_),
+                ("wAttributes", wintypes.WORD),
+                ("srWindow", SMALL_RECT_),
+                ("dwMaximumWindowSize", COORD_),
+            ]
+
+        h = ctypes.windll.kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        info = CSBI()
+        if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(h, ctypes.byref(info)):
+            return int(info.dwCursorPosition.Y)
+    except Exception:
+        pass
     return None
 
 
-def _read_click():
-    """Read one SGR mouse click (ESC[<b;x;yM) without blocking forever.
+def _set_mouse_mode(on: bool, restore: Optional[int] = None) -> Optional[int]:
+    """Toggle console mouse input (clicks reach ReadConsoleInput).
 
-    Enabled only inside copy mode / click-listen windows so normal typing
-    never fights mouse reporting. Returns (col, row) 1-based, or (None, None).
+    Disables QuickEdit while active (conhost requirement). Call
+    ``_set_mouse_mode(True)`` → returns the previous mode; restore it with
+    ``_set_mouse_mode(False, old)`` so the user's QuickEdit setting comes
+    back exactly as it was.
     """
-    if os.name != "nt" or not sys.stdin.isatty():
-        return (None, None)
+    if os.name != "nt":
+        return None
     try:
         import ctypes
-        import msvcrt
 
         kernel32 = ctypes.windll.kernel32
-        hStdin = kernel32.GetStdHandle(-10)
+        h = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
         mode = ctypes.c_uint32()
-        kernel32.GetConsoleMode(hStdin, ctypes.byref(mode))
-        # ENABLE_VIRTUAL_TERMINAL_INPUT (0x0200) + ENABLE_WINDOW_INPUT off
-        kernel32.SetConsoleMode(hStdin, 0x0200)
-        try:
-            buf = b""
-            deadline = time.time() + 0.5
-            while time.time() < deadline and b"M" not in buf:
-                if msvcrt.kbhit():
-                    buf += msvcrt.getwch().encode("utf-8", "ignore")
-                else:
-                    time.sleep(0.01)
-            for part in buf.decode("utf-8", "ignore").split("\x1b[<"):
-                if "M" in part:
-                    body = part.split("M")[0]
-                    btn, x, y = body.split(";")[:3]
-                    if int(btn) in (0, 1, 2):  # press, not scroll/release
-                        return (int(x), int(y))
-        finally:
-            kernel32.SetConsoleMode(hStdin, mode.value)
+        if not kernel32.GetConsoleMode(h, ctypes.byref(mode)):
+            return None
+        old = mode.value
+        if on:
+            new = (old & ~_ENABLE_QUICK_EDIT_MODE) | _ENABLE_MOUSE_INPUT | _ENABLE_EXTENDED_FLAGS
+            kernel32.SetConsoleMode(h, new)
+            return old
+        if restore is not None:
+            kernel32.SetConsoleMode(h, restore)
+        return None
     except Exception:
-        pass
-    return (None, None)
+        return None
+
+
+def _read_console_event(timeout: float = 0.05):
+    """Poll ONE console input record without blocking the loop.
+
+    Returns ('mouse', x, y, button_down) · ('key', vk, key_down) · None.
+    Non-mouse/key records (focus, menu, window-buffer events) are consumed
+    and skipped so the loop never stalls on them.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        class COORD_(ctypes.Structure):
+            _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+
+        class MOUSE_EVENT_RECORD(ctypes.Structure):
+            _fields_ = [
+                ("dwMousePosition", COORD_),
+                ("dwButtonState", wintypes.DWORD),
+                ("dwControlKeyState", wintypes.DWORD),
+                ("dwEventFlags", wintypes.DWORD),
+            ]
+
+        class KEY_EVENT_RECORD(ctypes.Structure):
+            _fields_ = [
+                ("bKeyDown", wintypes.BOOL),
+                ("wRepeatCount", wintypes.WORD),
+                ("wVirtualKeyCode", wintypes.WORD),
+                ("wVirtualScanCode", wintypes.WORD),
+                ("uChar", wintypes.WCHAR),
+                ("dwControlKeyState", wintypes.DWORD),
+            ]
+
+        class _Event(ctypes.Union):
+            _fields_ = [("MouseEvent", MOUSE_EVENT_RECORD), ("KeyEvent", KEY_EVENT_RECORD)]
+
+        class INPUT_RECORD(ctypes.Structure):
+            _anonymous_ = ("Event",)
+            _fields_ = [("EventType", wintypes.WORD), ("Event", _Event)]
+
+        kernel32 = ctypes.windll.kernel32
+        h = kernel32.GetStdHandle(-10)
+        rec = INPUT_RECORD()
+        n = wintypes.DWORD()
+        if not kernel32.PeekConsoleInputW(h, ctypes.byref(rec), 1, ctypes.byref(n)) or n.value == 0:
+            time.sleep(timeout)
+            return None
+        if not kernel32.ReadConsoleInputW(h, ctypes.byref(rec), 1, ctypes.byref(n)):
+            return None
+        if rec.EventType == 0x0002:  # MOUSE_EVENT
+            me = rec.MouseEvent
+            return (
+                "mouse",
+                int(me.dwMousePosition.X),
+                int(me.dwMousePosition.Y),
+                bool(me.dwButtonState & 0x1),  # left button
+                int(me.dwEventFlags),          # 0 = click, 1 = move
+            )
+        if rec.EventType == 0x0001:  # KEY_EVENT
+            ke = rec.KeyEvent
+            return ("key", int(ke.wVirtualKeyCode), bool(ke.bKeyDown))
+        return None
+    except Exception:
+        return None
+
+
+def handle_click(
+    x: int,
+    y: int,
+    expandable_ref: Optional[List[dict]] = None,
+    hint_rows: Optional[Dict[int, int]] = None,
+) -> Optional[str]:
+    """Route a terminal mouse click. Returns an action string or None.
+
+    Row-based first: the click's screen-buffer row (y) is matched against
+    the hint rows recorded by ``UI.render_action`` (±1 row slack). Falls
+    back to the legacy column heuristic against the registry length.
+    Pure Python — no mouse-mode escape codes, so typing is never affected.
+    """
+    if hint_rows:
+        idx = _hit_test_hint(hint_rows, int(y))
+        if idx is not None:
+            return "/expand"
+    if expandable_ref and 0 < int(x) <= len(expandable_ref):
+        return "/expand"
+    return None
 
 
 class UI:
@@ -816,6 +1008,22 @@ class UI:
         self.mascot = Mascot(enabled=not quiet, mouse_tracking=True)
         self.last_final = ""  # remembered for /copy
         self.thinking = ThinkingPanel()
+        # Click-to-expand registry: every trimmed tool output is remembered
+        # (tool, args, result, is_error) with the screen-buffer row of its
+        # '+N more lines' hint so mouse clicks can re-render it in full.
+        self.expandable: List[dict] = []
+        self.hint_rows: Dict[int, int] = {}  # buffer row -> 1-based hint idx
+
+    # -- click-to-expand -------------------------------------------------
+    def render_action_full(self, idx: int) -> None:
+        """Re-render tool call #idx with its FULL output (no re-execution)."""
+        if not 0 < idx <= len(self.expandable):
+            print(f"{RED}✗ no expandable output #{idx}{RESET}")
+            return
+        entry = self.expandable[idx - 1]
+        self.render_action(
+            entry["tool"], entry["args"], entry["result"], entry["is_error"], _full=True
+        )
 
     # -- boot ---------------------------------------------------------
     def show_banner(self, version: str, fast: bool = False) -> None:
@@ -883,7 +1091,7 @@ class UI:
         head = words[:80] + ("…" if len(words) > 80 else "")
         print(f"{PURPLE}✻ thinking{RESET} {ITALIC}{head}{RESET}")
 
-    def render_action(self, tool: str, args: dict, result: str, is_error: bool) -> None:
+    def render_action(self, tool: str, args: dict, result: str, is_error: bool, _full: bool = False) -> None:
         if self.quiet:
             return
         icon = "✗" if is_error else "✓"
@@ -893,12 +1101,30 @@ class UI:
         print(f"{color}{icon} {BOLD}{tool}{RESET} {MUTED}{summary}{RESET}")
         if result and not self.quiet:
             lines = result.splitlines()
-            shown = lines if self.expand_output else lines[:14]
+            shown = lines if (_full or self.expand_output) else lines[:14]
             for line in shown:
                 print(f"  {MUTED}│{RESET} {SILVER}{line[:150]}{RESET}")
             hidden = len(lines) - len(shown)
             if hidden > 0:
-                print(f"  {MUTED}│{RESET} " + expand_hint(tool, hidden))
+                if not _full:
+                    # remember the call so a mouse click can expand it later
+                    self.expandable.append(
+                        {"tool": tool, "args": args, "result": result, "is_error": is_error, "hidden": hidden}
+                    )
+                    # cap memory: keep the last 12 expandable outputs — and
+                    # shift hint_rows so every row keeps pointing at the
+                    # same (now shifted) registry entry
+                    while len(self.expandable) > 12:
+                        self.expandable.pop(0)
+                        self.hint_rows = {
+                            r: i - 1 for r, i in self.hint_rows.items() if i > 1
+                        }
+                    row = _console_cursor_row()
+                    idx = len(self.expandable)
+                    if row is not None:
+                        self.hint_rows[row] = idx
+                hint = expand_hint(tool, hidden, self.expandable)
+                print(f"  {MUTED}│{RESET} {hint}")
 
     def render_error(self, message: str) -> None:
         print(f"{RED}✗ {message}{RESET}")
