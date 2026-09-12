@@ -1,22 +1,23 @@
 # claume-code
 
 ```
- ██████╗██╗      █████╗ ██╗   ██╗███╗   ███╗███████╗
-██╔════╝██║     ██╔══██╗██║   ██║████╗ ████║██╔════╝
-██║     ██║     ███████║██║   ██║██╔████╔██║███████╗
-██║     ██║     ██╔══██║██║   ██║██║╚██╔╝██║╚════██║
-╚█████╗ ███████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║███████║
- ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝
+ ██████╗██╗      █████╗ ██╗   ██╗███╗   ███╗███████╗███████╗
+██╔════╝██║     ██╔══██╗██║   ██║████╗ ████║██╔════╝██╔════╝
+██║     ██║     ███████║██║   ██║██╔████╔██║███████╗█████╗
+██║     ██║     ██╔══██║██║   ██║██║╚██╔╝██║╚════██║╚════██║
+╚█████╗ ███████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║███████║███████║
+ ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝╚══════╝
 ```
 
-**claume-code** is a pixel-animated **desktop CLI coding agent** (not a web app) that
-builds full projects from natural-language prompts — inspired by Claude Code and
+**claume-code v2** is a pixel-animated **desktop CLI coding agent** (not a web app)
+that builds full projects from natural-language prompts — inspired by Claude Code and
 Freebuff, powered **free** by NVIDIA NIM through the built-in **free-claume proxy**.
 
-> 🎬 Pixel banner animations · 🧠 ReAct agentic loop · 🛠 17 built-in tools
-> 🌐 free-claume proxy (OpenAI-compatible) · 🖥 admin UI at `/admin` · 🔐 local key vault
-> 🧩 MCP server support · 📚 skills from GitHub · ⚡ auto mode + effort levels
-> 🌍 multi-language (Python/JS/TS/Go/Rust/Java/C#/C++…) · 🔁 self-update
+> 🎬 Pixel banner + animated bot mascot · 🧠 extended-thinking ReAct loop
+> 🛠 18 built-in tools · 🌐 free-claume proxy (OpenAI-compatible) · 🖥 admin UI at `/admin`
+> 🔐 local key vault · 🧩 MCP client + **Link System design pipeline** · 📚 skills from GitHub
+> 🎭 **4 permission modes** (manual / accept / plan / auto, Shift+Tab) · 💾 **persistent sessions**
+> 🤖 **parallel subagents** · 🎨 **7 color themes** · 📋 clipboard integration · 🔁 self-update
 
 Default model: **`nvidia/nemotron-3-super-120b-a12b`** (FCC-style), with an
 ordered **fallback chain** — if a model is retired (410) or rate-limited, the
@@ -68,10 +69,25 @@ claume
 ❯ clone https://github.com/pallets/flask and explain its structure
 ❯ fix the failing test in tests/ and make pytest pass
 ❯ create a REST API with fastapi + sqlite with tests
+❯ /mode plan       ← research first, present a plan, no writes
+❯ /agents scan auth ; scan api ; scan db    ← parallel subagents, merged report
+❯ /design fluid bento landing hero ← MCP design pipeline (Link System)
+❯ /theme synthwave ← switch the whole terminal palette
+❯ /continue        ← pick up yesterday's session
 ❯ /proxy-ui        ← admin UI in your browser: paste key, pick model, Apply
-❯ /auto on         ← fewer confirmations (destructive still asks)
 ❯ /effort deep     ← harder thinking for tricky bugs
 ```
+
+### Permission modes (Shift+Tab cycles, like Claude Code)
+
+| Mode | Behavior |
+|---|---|
+| `manual` ⏸ | ask before every write/command (safest) |
+| `accept` ⏵⏵ | file edits run free; shell still asks |
+| `plan` ◇ | read-only research → presents a plan for approval |
+| `auto` ⏵⏵⏵ | hands-off; **destructive always asks** |
+
+Switch anytime: Shift+Tab (in-terminal) or `/mode <name>`.
 
 ### Slash commands
 
@@ -79,10 +95,19 @@ claume
 |---|---|
 | `/help` | all commands |
 | `/new` | fresh conversation |
-| `/model <name>` | pick model (e.g. `meta/llama-3.3-70b-instruct`) |
+| `/model <name>` | pick model (e.g. `qwen/qwen3-coder-480b-a35b-instruct`) |
 | `/recommend` | recommended free models |
 | `/effort fast\|balanced\|deep` | thinking budget (tokens + temperature) |
-| `/auto on\|off` | auto mode: fewer confirmations |
+| `/mode <name>` | manual · accept · plan · auto (Shift+Tab cycles) |
+| `/auto on\|off` | legacy alias of `/mode auto\|manual` |
+| `/theme [name]` | 7 terminal palettes: nvidia-green, claude-orange, cyber-blue, synthwave, matrix, sunset, mono |
+| `/expand on\|off` | show full tool output (default trims to 14 lines) |
+| `/copy [text]` | copy last answer (or text) to clipboard — answers auto-copy |
+| `/mascot` | the claume pixel bot says hi |
+| `/session [id]` · `/resume` · `/continue` | persistent chat history (`claume --continue` on boot) |
+| `/agents t1 ; t2 ; t3` | parallel subagents → merged report |
+| `/design <prompt>` | run the MCP Link System design pipeline |
+| `/mcp-preset design` | install the UI stack: 21st.dev + reactbits + motion + shadcnspace |
 | `/proxy` | start/reuse the free-claume proxy |
 | `/proxy-ui` | luxury dashboard in your browser |
 | `/keys` · `/key NAME` · `/key-del NAME` | manage the local key vault ("live space") |
@@ -117,12 +142,37 @@ Any OpenAI-compatible provider works. Vault the key once, switch provider:
 `tree_view` · `make_directory` · `delete_path` · `search_text` (grep) ·
 `execute_command` (foreground + background for dev servers) · `background_output` ·
 `background_stop` · `git_clone` · `git_commit` · `git_status` · `web_search` ·
-`fetch_url` · plus MCP servers you register.
+`fetch_url` · `spawn_subagents` (parallel task agents) · plus every tool from
+connected MCP servers (bridged automatically as `mcp_<server>_<tool>`).
 
 **Safety:** every command is classified `safe / caution / destructive`
-(`claume/security.py`). Caution → asked. Destructive (`rm -rf`, `git push --force`,
-`format`, `del /s`…) → **always asked**, even in auto mode. Secrets are scrubbed
-from everything shown to the model.
+(`claume/security.py`). Caution → asked (except accept/auto mode). Destructive
+(`rm -rf`, `git push --force`, `format`, `del /s`…) → **always asked**, even in
+auto mode. Secrets are scrubbed from everything shown to the model.
+
+## The Link System (design pipeline)
+
+`/mcp-preset design` installs a UI-focused MCP stack, and `/design <prompt>`
+orchestrates it in stages instead of treating servers as islands:
+
+```
+[ your prompt ] → 1. atomic-shadcnspace   layout blueprint (grid, tokens)
+                → 2. uidiscovery-21st     human-designed component blocks
+                → 3. animation-motion     Framer Motion timelines
+                → 4. microinteractions-reactbits  fluid canvas background
+                → claume builds it — no generic placeholder divs
+```
+
+Each stage feeds its output into the next; missing servers degrade gracefully
+(claume builds that part by hand, same quality bar).
+
+## Subagents
+
+Big job? Split it. `/agents map the api ; audit the tests ; review the docs`
+spawns independent agents — each with its own context, step budget, and tool
+access — running **in parallel on threads**, then an LLM merge pass combines
+their reports into one summary. The agent itself can spawn them mid-task via
+the `spawn_subagents` tool.
 
 ## Architecture
 
@@ -132,11 +182,14 @@ claume-code/
 ├── run-claume.ps1                  run from source
 ├── pyproject.toml                  pip packaging (claume console script)
 ├── claume/
-│   ├── cli.py          REPL: banner, first-run, slash dispatch
-│   ├── agent.py        ReAct loop: think → act → observe → repeat
+│   ├── cli.py          REPL: banner, mascot, sessions, Shift+Tab modes, slash dispatch
+│   ├── agent.py        ReAct loop: think → act → observe → auto-continue
 │   ├── parser.py       forgiving JSON envelope parser
-│   ├── prompts.py      system prompts + context builder
-│   ├── llm.py          OpenAI-compatible client + provider map ("live space")
+│   ├── prompts.py      system prompts + mode blocks + extended thinking
+│   ├── llm.py          OpenAI-compatible client + provider map + model fallback chain
+│   ├── sessions.py     persistent chat history (~/.claume/sessions)
+│   ├── subagents.py    parallel multi-task agents + merge pass
+│   ├── mcp.py          MCP stdio JSON-RPC client + Link System design pipeline
 │   ├── proxy.py        free-claume proxy (OpenAI → NVIDIA NIM, streaming,
 │   │                   retries, multi-key rotation, first-run key prompt)
 │   ├── proxy_ui.py     luxury browser dashboard
@@ -144,7 +197,7 @@ claume-code/
 │   ├── security.py     command classifier (safe/caution/destructive) + redaction
 │   ├── keyvault.py     obfuscated local key store
 │   ├── config.py       %USERPROFILE%\.claume\config.json
-│   └── ui.py           pixel banner, animations, colors, confirmations
+│   └── ui.py           pixel banner, mascot, 7 themes, clipboard, mode chips
 │   └── tools/
 │       ├── registry.py     name → schema → dispatch
 │       ├── fs.py           filesystem tools
@@ -190,8 +243,9 @@ Pulls the latest code via git (or re-run the installer one-liner).
 | `claume` not found after install | open a **new** PowerShell tab (PATH refresh) |
 | `cannot reach LLM endpoint` | run `/proxy`, check `/doctor` |
 | `401` from NVIDIA | key invalid — `/key NVIDIA_API_KEY` to re-set |
-| `410` model retired | claume auto-migrates EOL models; also set fallbacks in `/proxy-ui` (admin UI → Fallback models) |
+| `410` model retired | claume auto-migrates EOL models and walks the fallback chain; set fallbacks in `/proxy-ui` |
 | Rate limited | add more keys: `/key NVIDIA_API_KEY_2` (auto-rotates) |
+| Task hit a checkpoint | it auto-continues (up to 5×); say `continue` if it stops — progress is preserved |
 | Weird characters | use Windows Terminal (better glyph support) |
 
 ## Tests

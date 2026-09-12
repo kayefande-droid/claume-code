@@ -104,7 +104,16 @@ def stream_chat(
     """
     cfg = config.Config()
     provider = provider or cfg.get("provider", "nvidia")
-    model = model or cfg.model
+    # Model fallback chain: primary first, then each fallback (mirrors
+    # FCC-style resilience so an EOL/dead model doesn't kill the task).
+    model_chain: List[str] = []
+    primary = model or cfg.model
+    if primary:
+        model_chain.append(primary)
+    for fb in cfg.get("model_fallbacks", []) or []:
+        fb = str(fb).strip()
+        if fb and fb not in model_chain:
+            model_chain.append(fb)
     endpoint = endpoint_for(provider).rstrip("/")
     key = api_key_for(provider)
 
@@ -133,28 +142,40 @@ def stream_chat(
         "stream": bool(on_token),
     }
 
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"{endpoint}/chat/completions",
-        data=body,
-        headers=headers,
-        method="POST",
-    )
+    last_error: Optional[LLMError] = None
+    for attempt_model in model_chain:
+        payload["model"] = attempt_model
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{endpoint}/chat/completions",
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=300, context=_SSL_CTX)
+            return _consume_response(resp, payload, on_token)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")
+            err = LLMError(_friendly_http_error(exc.code, detail))
+            # Only failover on model-level errors; auth/billing errors are fatal.
+            if exc.code in (400, 404, 410, 429, 500, 502, 503) and len(model_chain) > 1:
+                last_error = err
+                continue
+            raise err from exc
+        except urllib.error.URLError as exc:
+            # Connection-level failure: no point trying the same endpoint
+            raise LLMError(
+                f"cannot reach LLM endpoint {endpoint} — is the free-claume proxy running? ({exc})"
+            ) from exc
+    raise last_error or LLMError("all models in the fallback chain failed")
 
-    try:
-        resp = urllib.request.urlopen(req, timeout=300, context=_SSL_CTX)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")
-        raise LLMError(_friendly_http_error(exc.code, detail)) from exc
-    except urllib.error.URLError as exc:
-        raise LLMError(
-            f"cannot reach LLM endpoint {endpoint} — is the free-claume proxy running? ({exc})"
-        ) from exc
 
+def _consume_response(resp: Any, payload: Dict[str, Any], on_token: Optional[Any]) -> str:
+    """Read an OpenAI-compatible response (streamed or buffered) into text."""
     chunks: List[str] = []
 
-    if payload["stream"]:
-        buffer = b""
+    if payload.get("stream"):
         while True:
             line = resp.readline()
             if not line:

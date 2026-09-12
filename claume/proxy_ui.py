@@ -73,7 +73,9 @@ ADMIN_HTML = r"""<!doctype html>
 <body>
 <div class="wrap">
   <div class="logo"><span class="g">free</span>-claume <span class="m">admin</span></div>
-  <div class="sub"><span class="dot"></span>OpenAI-compatible gateway to NVIDIA NIM &middot; paste your key, pick a model, Apply.</div>
+  <div class="sub"><span class="dot"></span>OpenAI-compatible gateway to NVIDIA NIM &middot; paste your key, pick a model, Apply.
+    <span id="verline" style="color:var(--green)">v2.0.0</span> &middot;
+    <a href="https://github.com/kayefande-droid/claume-code" target="_blank" style="color:var(--mint)">github.com/kayefande-droid/claume-code</a></div>
 
   <div class="card">
     <label>API key (NVIDIA NIM)</label>
@@ -97,6 +99,7 @@ ADMIN_HTML = r"""<!doctype html>
   </div>
 
   <div class="stats">
+    <div class="stat"><div class="k">claume version</div><div class="v green" id="version">—</div></div>
     <div class="stat"><div class="k">Endpoint</div><div class="v mint" style="font-size:15px" id="baseurl">—</div></div>
     <div class="stat"><div class="k">Key</div><div class="v green" id="keystate">—</div></div>
     <div class="stat"><div class="k">Requests</div><div class="v" id="reqs">0</div></div>
@@ -120,6 +123,7 @@ function msg(text, cls){ const m=$('msg'); m.textContent=text; m.className=cls||
 async function loadData(){
   try{
     const r = await fetch('/admin/data'); const d = await r.json();
+    $('version').textContent = d.version || '2.0.0';
     $('keystate').textContent = d.has_key ? 'saved' : 'missing';
     $('keymask').textContent = d.key_masked ? ('saved: '+d.key_masked) : '';
     $('reqs').textContent = d.stats.requests;

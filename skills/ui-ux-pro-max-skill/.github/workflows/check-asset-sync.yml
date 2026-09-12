@@ -1,0 +1,29 @@
+name: Check asset sync
+
+on:
+  pull_request:
+    paths:
+      - "src/ui-ux-pro-max/**"
+      - "cli/assets/**"
+      - "cli/scripts/sync-assets.mjs"
+      - ".github/workflows/check-asset-sync.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/ui-ux-pro-max/**"
+      - "cli/assets/**"
+
+jobs:
+  check-assets:
+    name: cli/assets must match src/ui-ux-pro-max
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # check:assets runs `node scripts/sync-assets.mjs --check`, which uses only
+      # node builtins (no npm install needed) and normalizes CRLF/LF before
+      # hashing, so it compares content rather than line endings.
+      - name: Check CLI assets are in sync with source of truth
+        run: npm --prefix cli run check:assets

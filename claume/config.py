@@ -13,6 +13,11 @@ from typing import Any, Dict, Optional
 
 APP_DIR_NAME = ".claume"
 
+# Permanent upstream repo — used by /update, /repo, and self-update so
+# every installed copy always knows where its source lives.
+REPO_URL = "https://github.com/kayefande-droid/claume-code.git"
+REPO_WEB = "https://github.com/kayefande-droid/claume-code"
+
 # NVIDIA NIM models confirmed gone (410 Gone - end of life).
 DEAD_MODELS = {
     "meta/llama-3.3-70b-instruct",   # EOL 2026-08-26
@@ -43,6 +48,21 @@ def sessions_dir() -> Path:
     return claume_dir() / "sessions"
 
 
+def themes_dir() -> Path:
+    return claume_dir() / "themes"
+
+
+def projects_dir() -> Path:
+    """Home for everything claume builds: apps, folders, generated projects.
+
+    The agent suggests this as the working root for "build me an app"
+    requests so outputs never scatter across random cwd's.
+    """
+    d = claume_dir() / "projects"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def skills_dir() -> Path:
     return claume_dir() / "skills"
 
@@ -67,19 +87,36 @@ class Config:
         "model": "nvidia/nemotron-3-super-120b-a12b",
         "model_fallbacks": [],
         "effort": "balanced",
+        # Permission mode: manual | accept | plan | auto (like Claude Code)
+        "mode": "manual",
+        # Back-compat: old auto_mode flag folds into mode=auto
         "auto_mode": False,
         "classifier_enabled": True,
         "proxy_port": 8000,
         "proxy_host": "127.0.0.1",
         "max_steps": 24,
         "max_tool_calls_per_turn": 40,
+        # When a turn hits the step cap mid-task, keep going automatically
+        "auto_continue": True,
+        "max_auto_continues": 5,
         "stream": True,
         "theme": "nvidia-green",
         "pixel_animations": True,
+        "mascot": True,
         "confirm_destructive": True,
         "history_limit": 120,
         "context_tokens_soft_limit": 96_000,
+        # Terminal UX
+        "expand_output": False,
+        "auto_copy": True,
         "mcp_servers": {},
+        # Subagents
+        "subagent_max_steps": 14,
+        "subagent_max_tool_calls": 24,
+        "subagent_parallel": True,
+        # Sessions
+        "sessions_autosave": True,
+        "max_sessions": 30,
         "key_vault": {},
         "last_version": "",
         "first_run_done": False,
@@ -89,6 +126,7 @@ class Config:
         self._path = config_path()
         self._data: Dict[str, Any] = {}
         self._load()
+        self.migrate_legacy_flags()
 
     def _load(self) -> None:
         try:
@@ -142,8 +180,23 @@ class Config:
         return str(self.get("effort"))
 
     @property
+    def mode(self) -> str:
+        """Current permission mode (manual | accept | plan | auto)."""
+        m = str(self.get("mode", "manual"))
+        if m == "auto_mode":
+            m = "auto"
+        return m if m in ("manual", "accept", "plan", "auto") else "manual"
+
+    @property
     def auto_mode(self) -> bool:
-        return bool(self.get("auto_mode"))
+        """Back-compat: True when running in auto permission mode."""
+        return self.mode == "auto"
+
+    def migrate_legacy_flags(self) -> None:
+        """Fold legacy auto_mode bool into the new mode field, once."""
+        if self._data.get("auto_mode") and self._data.get("mode") in (None, "manual"):
+            self._data["mode"] = "auto"
+        self._data["auto_mode"] = False
 
 
 def load_proxy_state() -> Optional[Dict[str, Any]]:

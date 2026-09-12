@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -240,10 +241,40 @@ def _fetch(base: Path, **kw: Any) -> Tuple[str, bool]:
 
 
 # --------------------------------------------------------------------------
+# Multi-task subagents
+# --------------------------------------------------------------------------
+@register(
+    "spawn_subagents",
+    "Spawn 2-6 independent sub-agents that work in parallel on separate "
+    "subtasks, then merge their reports. Use for multi-part jobs: "
+    '"tasks": [{"name": "explorer", "task": "map the repo structure"}, '
+    '{"name": "tester", "task": "run the test suite and summarize failures"}]. '
+    "Do NOT use for simple single-step tasks.",
+    {"tasks": "List of {name, task} objects"},
+    ["tasks"],
+)
+def _spawn_subagents(base: Path, **kw: Any) -> Tuple[str, bool]:
+    # The real implementation lives in Agent._run_subagents (needs UI).
+    # This stub is intercepted by the agent before registry.execute.
+    return "handled by agent", False
+
+
+# --------------------------------------------------------------------------
 # Registry helpers
 # --------------------------------------------------------------------------
 def get(name: str) -> Optional[Tool]:
     return REGISTRY.get(name)
+
+
+def bridge_mcp() -> int:
+    """Lazily bridge configured MCP servers' tools into the registry."""
+    try:
+        from .. import mcp as mcpmod
+
+        mcpmod.set_registry_target(sys.modules[__name__])
+        return mcpmod.bridge_to_registry()
+    except Exception:
+        return 0
 
 
 def names() -> List[str]:

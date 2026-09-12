@@ -38,6 +38,22 @@ from .proxy_ui import ADMIN_HTML
 NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
 MODELS_URL = f"{NVIDIA_BASE}/models"
 
+
+def _claume_version() -> str:
+    """Resolve the installed claume version (works for venv installs too)."""
+    try:
+        from .version import __version__
+
+        return __version__
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version as _v
+
+        return _v("claume-code")
+    except Exception:
+        return "unknown"
+
 # Current (2026) free NIM pool - ordered by coding capability.
 # meta/llama-3.3-70b-instruct went EOL on 2026-08-26; see config.DEAD_MODELS.
 DEFAULT_MODEL_POOL = [
@@ -309,6 +325,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             {
                 "has_key": bool(keys),
                 "key_masked": masked,
+                "version": _claume_version(),
+                "repo": config.REPO_URL,
                 "model": cfg.model,
                 "fallbacks": cfg.get("model_fallbacks", []) or [],
                 "models": (models[:80] or list(DEFAULT_MODEL_POOL)),

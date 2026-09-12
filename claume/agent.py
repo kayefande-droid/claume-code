@@ -6,6 +6,14 @@ Each user turn:
   3. Parse the strict JSON envelope (thought / action / final).
   4. Execute the action (with confirmation for risky tools).
   5. Feed the observation back and repeat until 'final' or step cap.
+
+v2 changes:
+  * step counter resets every turn (fixes permanent "step limit reached")
+  * auto-continue: when the cap is hit mid-task the turn keeps going
+    with a continuation prompt instead of dying
+  * plan mode enforces read-only tools
+  * spawn_subagents tool for parallel multi-task agents
+  * session autosave hook
 """
 from __future__ import annotations
 
@@ -15,10 +23,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import config, llm, parser, prompts, security
+from . import config, llm, parser, prompts, security, subagents
 from .tools import registry
 
 ConfirmFn = Callable[[str, str], bool]  # (title, detail) -> bool
+
+READ_ONLY_TOOLS = {
+    "read_file", "list_directory", "tree_view", "search_text",
+    "git_status", "web_search", "fetch_url", "background_output",
+    "spawn_subagents",
+}
 
 
 class Agent:
@@ -27,13 +41,14 @@ class Agent:
         workspace: Path,
         ui: Any,
         confirm_fn: ConfirmFn,
-        auto_mode: Optional[bool] = None,
+        mode: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         self.workspace = workspace
         self.ui = ui
         self.confirm_fn = confirm_fn
         self.cfg = config.Config()
-        self.auto_mode = self.cfg.auto_mode if auto_mode is None else auto_mode
+        self.mode = self.cfg.mode if mode is None else mode
         self.history: List[Dict[str, str]] = []
         self.step = 0
         self.max_steps = int(self.cfg.get("max_steps", 24))
@@ -41,13 +56,17 @@ class Agent:
         self._tool_cap = int(self.cfg.get("max_tool_calls_per_turn", 40))
         self._secret_cache: List[str] = []
         self._fail_streak = 0
+        self.session_id = session_id
+        self._continues_used = 0
+        self._subagent_log: List[str] = []
 
     # ------------------------------------------------------------------
     # Context
     # ------------------------------------------------------------------
     def _context_block(self) -> str:
+        extra = f"- Permission mode: {self.mode}"
         return prompts.build_context_block(
-            str(self.workspace), os.name, self.cfg.model
+            str(self.workspace), os.name, self.cfg.model, extra=extra
         )
 
     def _secrets(self) -> List[str]:
@@ -67,18 +86,57 @@ class Agent:
         return self._secret_cache
 
     # ------------------------------------------------------------------
-    # One full user turn (multi-step ReAct)
+    # One full user turn (multi-step ReAct with auto-continue)
     # ------------------------------------------------------------------
     def run_turn(self, user_text: str) -> str:
         self.history.append({"role": "user", "content": user_text})
         final_text = ""
         self._tool_calls = 0
+        self._continues_used = 0
+        max_continues = int(self.cfg.get("max_auto_continues", 5))
+        auto_continue = bool(self.cfg.get("auto_continue", True))
 
         system_prompt = prompts.build_system_prompt(
-            registry.schemas(), self._context_block()
+            registry.schemas(), self._context_block(), mode=self.mode
         )
 
-        while self.step < self.max_steps and self._tool_calls < self._tool_cap:
+        # --- plan mode: force read-only research -----------------------
+        if self.mode == "plan":
+            self.history.append(
+                {"role": "user", "content": prompts.build_plan_instruction()}
+            )
+
+        while True:
+            # --- cap checks -------------------------------------------
+            if self.step >= self.max_steps or self._tool_calls >= self._tool_cap:
+                if auto_continue and self._continues_used < max_continues:
+                    self._continues_used += 1
+                    self.ui.render_info(
+                        f"reached {self.max_steps}-step checkpoint — continuing "
+                        f"({self._continues_used}/{max_continues})…"
+                    )
+                    self.history.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "SYSTEM: you reached the checkpoint. Do NOT restart. "
+                                "Continue the task from where you left off. If you "
+                                "are nearly done, wrap up and produce 'final'."
+                            ),
+                        }
+                    )
+                    # Refill budgets and DON'T count this cycle against the
+                    # step cap — otherwise the fresh continue prompt would
+                    # immediately hit the cap again without a model call.
+                    self._tool_calls = 0
+                    self.step = 0
+                    continue
+                self.ui.render_warning(
+                    "stopping here — auto-continue budget used up. "
+                    "Say 'continue' to keep going (progress is preserved)."
+                )
+                break
+
             self.step += 1
             messages = [{"role": "system", "content": system_prompt}] + self.history
 
@@ -100,20 +158,23 @@ class Agent:
             turn = parser.parse_turn(reply)
             if turn.error:
                 self._fail_streak += 1
-                if self._fail_streak >= 2:
-                    # Feed the malformed output back so the model can fix it.
-                    self.history.append({"role": "assistant", "content": reply[:4000]})
-                    self.history.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "SYSTEM: your last reply was not a valid JSON envelope "
-                                f"({turn.error}). Reply again with ONLY the JSON object "
-                                "in the schema I gave you."
-                            ),
-                        }
+                self.history.append({"role": "assistant", "content": reply[:4000]})
+                self.history.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "SYSTEM: your last reply was not a valid JSON envelope "
+                            f"({turn.error}). Reply again with ONLY the JSON object "
+                            "in the schema I gave you."
+                        ),
+                    }
+                )
+                if self._fail_streak >= 4:
+                    self.ui.render_error(
+                        "model keeps producing invalid output — turn paused. "
+                        "Try /effort deep or /model."
                     )
-                    continue
+                    break
                 continue
 
             self._fail_streak = 0
@@ -127,8 +188,16 @@ class Agent:
                 break
 
             if turn.action:
-                self._tool_calls += 1
-                result, is_err = self._execute_with_confirm(turn.action)
+                # --- plan-mode gate -----------------------------------
+                if self.mode == "plan" and turn.action.tool not in READ_ONLY_TOOLS:
+                    result = (
+                        f"error: plan mode blocks '{turn.action.tool}' — read-only "
+                        "tools only. Produce your plan as 'final'."
+                    )
+                    is_err = True
+                else:
+                    self._tool_calls += 1
+                    result, is_err = self._execute_with_confirm(turn.action)
                 self.ui.render_action(turn.action.tool, turn.action.args, result, is_err)
 
                 self.history.append({"role": "assistant", "content": reply[:4000]})
@@ -139,9 +208,9 @@ class Agent:
                     }
                 )
 
-        else:
-            if self.step >= self.max_steps:
-                self.ui.render_warning("step limit reached — ask me to continue if needed")
+        # --- autosave ---------------------------------------------------
+        if self.session_id:
+            self._autosave()
 
         return final_text or "(no final answer produced)"
 
@@ -163,20 +232,82 @@ class Agent:
         if not tool:
             return f"error: unknown tool '{action.tool}'", True
 
+        # mode rules
+        if self.mode == "plan" and action.tool not in READ_ONLY_TOOLS:
+            return "error: plan mode blocks this tool", True
+
+        if action.tool == "spawn_subagents":
+            return self._run_subagents(action.args)
+
         needs = tool.dangerous or (tool.needs_confirm and tool.needs_confirm(action.args))
-        if needs and not self.auto_mode:
+        if needs:
             verdict = security.classify_command(str(action.args.get("command", "")))
-            title = action.tool
+            is_destructive = tool.dangerous or verdict.level == "destructive"
             detail = str(action.args.get("command") or action.args.get("path") or action.args)
-            if verdict.level == "destructive":
+
+            if is_destructive:
+                # Destructive actions ask in EVERY mode, no exceptions.
                 self.ui.render_warning(f"DESTRUCTIVE: {detail}")
-            ok = self.confirm_fn(title, detail)
-            if not ok:
-                return "user declined this action", False
+                ok = self.confirm_fn(action.tool, detail)
+                if not ok:
+                    return "user declined this action", False
+            elif self.mode == "auto":
+                pass  # auto mode: caution-level actions run without asking
+            elif self.mode == "accept" and action.tool in ("write_file", "patch_file", "make_directory"):
+                pass  # accept-edits: file edits run free
+            else:
+                ok = self.confirm_fn(action.tool, detail)
+                if not ok:
+                    return "user declined this action", False
 
         result, is_err = registry.execute(self.workspace, action.tool, action.args)
         result = security.redact_secrets(result, self._secrets())
         return result, is_err
+
+    # ------------------------------------------------------------------
+    # Subagents tool
+    # ------------------------------------------------------------------
+    def _run_subagents(self, args: Dict[str, Any]) -> Tuple[str, bool]:
+        raw = args.get("tasks")
+        if not isinstance(raw, list) or not raw:
+            return "error: spawn_subagents requires tasks: [{name, task}, ...]", True
+        tasks = []
+        for i, item in enumerate(raw[:6]):
+            if not isinstance(item, dict) or not item.get("task"):
+                continue
+            tasks.append(
+                {
+                    "name": str(item.get("name", f"agent-{i + 1}")),
+                    "task": str(item["task"]),
+                }
+            )
+        if not tasks:
+            return "error: no valid tasks given", True
+        self.ui.render_info(
+            f"spawning {len(tasks)} subagent(s) ({'parallel' if self.cfg.get('subagent_parallel', True) else 'serial'})…"
+        )
+        results = subagents.run_swarm(self.workspace, tasks, ui=self.ui)
+        merged = subagents.combine_results(results, self.workspace)
+        lines = []
+        for r in results:
+            status = "✗ " + (r.error or "no summary") if r.error else (r.summary[:120] if r.summary else "(no summary)")
+            lines.append(f"{r.name}: {r.steps} steps, {r.tool_calls} calls — {status}")
+        return "\n".join(lines) + "\n\nMERGED REPORT:\n" + merged, False
+
+    # ------------------------------------------------------------------
+    # Session autosave
+    # ------------------------------------------------------------------
+    def _autosave(self) -> None:
+        try:
+            from . import sessions
+
+            sessions.save_session(
+                self.session_id,
+                self.history,
+                meta={"workspace": str(self.workspace), "mode": self.mode},
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Compaction
@@ -210,3 +341,8 @@ class Agent:
     def reset(self) -> None:
         self.history.clear()
         self.step = 0
+
+    def set_mode(self, mode: str) -> None:
+        if mode in ("manual", "accept", "plan", "auto"):
+            self.mode = mode
+            self.cfg.set("mode", mode)

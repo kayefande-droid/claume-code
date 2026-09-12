@@ -1,0 +1,29 @@
+{
+  "name": "godmode",
+  "displayName": "GodMode Website Designer",
+  "description": "Senior-level website design orchestration combining ReactBits components, UI/UX Pro Max design systems, ultracode workflows, and all available design skills to create professional, modern websites with smooth animations, cool designs, and embedded videos that appear human-crafted",
+  "version": "1.0.0",
+  "author": "Claude Code Assistant",
+  "license": "MIT",
+  "keywords": [
+    "website",
+    "design",
+    "reactbits",
+    "ui-ux",
+    "ultracode",
+    "mcp",
+    "orchestration",
+    "senior-level",
+    "modern",
+    "animations",
+    "video"
+  ],
+  "platforms": [
+    "claude"
+  ],
+  "categories": [
+    "design",
+    "development",
+    "orchestration"
+  ]
+}

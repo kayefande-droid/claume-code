@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claume-code"
-version = "1.0.0"
-description = "Pixel-animated CLI coding agent with a free NVIDIA NIM proxy — like Claude Code, but free."
+version = "2.0.0"
+description = "Pixel-animated CLI coding agent with modes, sessions, subagents, themes and a free NVIDIA NIM proxy — like Claude Code, but free."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
