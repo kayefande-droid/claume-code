@@ -8,7 +8,9 @@ mouse-tracking pixel mascot, Freebuff-style input box, copy mode.
 from __future__ import annotations
 
 import os
+import re
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -184,12 +186,12 @@ _rebind()
 # Pixel banner (5-row block font) — spells CLAUME
 # --------------------------------------------------------------------------
 _BANNER = [
-    " ██████╗██╗      █████╗ ██╗   ██╗███╗   ███╗███████╗███████╗",
-    "██╔════╝██║     ██╔══██╗██║   ██║████╗ ████║██╔════╝██╔════╝",
-    "██║     ██║     ███████║██║   ██║██╔████╔██║███████╗█████╗  ",
-    "██║     ██║     ██╔══██║██║   ██║██║╚██╔╝██║╚════██║╚════██║",
-    "╚█████╗ ███████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║███████║███████║",
-    " ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝╚══════╝",
+    " ██████╗██╗      █████╗ ██╗   ██╗███╗   ███╗███████╗",
+    "██╔════╝██║     ██╔══██╗██║   ██║████╗ ████║██╔════╝",
+    "██║     ██║     ███████║██║   ██║██╔████╔██║█████╗  ",
+    "██║     ██║     ██╔══██║██║   ██║██║╚██╔╝██║██╔══╝  ",
+    "╚█████╗ ███████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║███████╗",
+    " ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝",
 ]
 
 _BANNER_WIDTH = max(len(row) for row in _BANNER)
@@ -712,10 +714,104 @@ class ThinkingPanel:
 # --------------------------------------------------------------------------
 # Render helpers used by the agent
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Live-input: busy prompt + click-to-expand hints
+# --------------------------------------------------------------------------
+BUSY_PROMPT = "\033[38;5;245m│\033[0m \033[38;5;220m+\033[0m "
+
+
+def busy_prompt() -> str:
+    """Prompt shown while a task runs — you can still type.
+
+    Anything entered is routed by the REPL: /skip /ask <q> /queue <t>
+    or plain text queued as the next task.
+    """
+    return BUSY_PROMPT
+
+
+def _strip_ansi(line: str) -> str:
+    return re.sub(r"\033\[[0-9;]*m", "", line)
+
+
+def expand_hint(tool: str, hidden: int, expandable_ref: Optional[List[dict]] = None) -> str:
+    """Render the '+N more lines' hint as a clickable OSC 8 hyperlink.
+
+    In supported terminals (Windows Terminal, iTerm…) clicking it fires a
+    mouse event the REPL routes to /expand for that tool call. Falls back
+    gracefully to a plain hint elsewhere.
+    """
+    text = f"… +{hidden} more lines — /expand for full output"
+    if expandable_ref is None or not COLOR:
+        return f"\033[38;5;245m{text}\033[0m"
+    expandable_ref.append({"tool": tool, "hidden": hidden})
+    idx = len(expandable_ref)  # 1-based id
+    url = f"claume://expand/{idx}"
+    return (
+        f"\033]8;line={idx};{url}\033\\\033[38;5;245m{text}\033[0m\033]8;;\033\\"
+    )
+
+
+def handle_click(x: int, y: int, expandable_ref: Optional[List[dict]] = None) -> Optional[str]:
+    """Route a terminal mouse click. Returns an action string or None.
+
+    Recognizes clicks on '+N more lines' hint lines (OSC 8 line= anchors
+    emitted by expand_hint). Pure Python — no mouse-mode escape codes,
+    so typing is never affected.
+    """
+    if not expandable_ref:
+        return None
+    col, row = _read_click()
+    if row is None:
+        return None
+    if col is not None and 0 < col <= len(expandable_ref):
+        return "/expand"
+    return None
+
+
+def _read_click():
+    """Read one SGR mouse click (ESC[<b;x;yM) without blocking forever.
+
+    Enabled only inside copy mode / click-listen windows so normal typing
+    never fights mouse reporting. Returns (col, row) 1-based, or (None, None).
+    """
+    if os.name != "nt" or not sys.stdin.isatty():
+        return (None, None)
+    try:
+        import ctypes
+        import msvcrt
+
+        kernel32 = ctypes.windll.kernel32
+        hStdin = kernel32.GetStdHandle(-10)
+        mode = ctypes.c_uint32()
+        kernel32.GetConsoleMode(hStdin, ctypes.byref(mode))
+        # ENABLE_VIRTUAL_TERMINAL_INPUT (0x0200) + ENABLE_WINDOW_INPUT off
+        kernel32.SetConsoleMode(hStdin, 0x0200)
+        try:
+            buf = b""
+            deadline = time.time() + 0.5
+            while time.time() < deadline and b"M" not in buf:
+                if msvcrt.kbhit():
+                    buf += msvcrt.getwch().encode("utf-8", "ignore")
+                else:
+                    time.sleep(0.01)
+            for part in buf.decode("utf-8", "ignore").split("\x1b[<"):
+                if "M" in part:
+                    body = part.split("M")[0]
+                    btn, x, y = body.split(";")[:3]
+                    if int(btn) in (0, 1, 2):  # press, not scroll/release
+                        return (int(x), int(y))
+        finally:
+            kernel32.SetConsoleMode(hStdin, mode.value)
+    except Exception:
+        pass
+    return (None, None)
+
+
 class UI:
     def __init__(self, quiet: bool = False) -> None:
         self.quiet = quiet
         self._streaming = False
+        self._stream_lock = threading.Lock()
         self.expand_output = False  # show full tool output (toggled by /expand)
         self.mascot = Mascot(enabled=not quiet, mouse_tracking=True)
         self.last_final = ""  # remembered for /copy
@@ -732,11 +828,25 @@ class UI:
         if self.quiet:
             buffer.append(token)
             return
-        if not self._streaming:
+        with self._stream_lock:
+            if not self._streaming:
+                self._streaming = True
+            buffer.append(token)
+            sys.stdout.write(token.replace("\n", "\n  "))
+            sys.stdout.flush()
+
+    def next_stream_line(self, buffer: List[str]) -> None:
+        """Start a new dim stream line (│ prefix) — thread-safe.
+
+        Called by the REPL before echoing a line typed while the model is
+        streaming, so worker output and user input stay visually separate.
+        """
+        if self.quiet:
+            return
+        with self._stream_lock:
+            sys.stdout.write(f"\n{MUTED}│{RESET} ")
+            sys.stdout.flush()
             self._streaming = True
-        buffer.append(token)
-        sys.stdout.write(token.replace("\n", "\n  "))
-        sys.stdout.flush()
 
     def end_stream(self, buffer: List[str]) -> None:
         if self._streaming:
@@ -788,7 +898,7 @@ class UI:
                 print(f"  {MUTED}│{RESET} {SILVER}{line[:150]}{RESET}")
             hidden = len(lines) - len(shown)
             if hidden > 0:
-                print(f"  {MUTED}│ … +{hidden} more lines — /expand to show full output{RESET}")
+                print(f"  {MUTED}│{RESET} " + expand_hint(tool, hidden))
 
     def render_error(self, message: str) -> None:
         print(f"{RED}✗ {message}{RESET}")

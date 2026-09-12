@@ -1,7 +1,20 @@
-"""claume CLI — interactive REPL entrypoint."""
+"""claume CLI — interactive REPL entrypoint.
+
+v2.2: always-listening REPL. The prompt stays live while a task runs:
+
+  ❯ build the dashboard        ← starts working immediately
+  │ + queue the API refactor   ← typed while running → queued
+  │ + /ask what does mcp mean? ← side question, answered without hindering
+  │ + /skip                    ← interrupts the running task
+
+A worker thread consumes the task queue; the main thread only reads input.
+Stream output is thread-safe (lock) and user lines are echoed with a `│`
+prefix so they stay visually separate from agent output.
+"""
 from __future__ import annotations
 
 import os
+import queue
 import sys
 import threading
 import time
@@ -104,7 +117,7 @@ def _print_context_line(workspace: Path) -> None:
     else:
         print(f"{_ui.GREY}  provider{RESET} {_ui.MINT}{cfg.get('provider')}{RESET} {_ui.GREY}· model{RESET} {_ui.MINT}{cfg.model}{RESET}")
     print(f"{_ui.GREY}  workspace{RESET} {_ui.MINT}{workspace}{RESET}")
-    print(f"{_ui.GREY}  {uimod.mode_chip(cfg.mode)} {_ui.GREY}· /help for commands · Shift+Tab mode · ctrl+c interrupt · /exit quit{RESET}\n")
+    print(f"{_ui.GREY}  {uimod.mode_chip(cfg.mode)} {_ui.GREY}· /help commands · type while a task runs (queued) · /ask · /skip · /exit{RESET}\n")
 
 
 def _resume_flag_sessions(argv: List[str], agent: Agent) -> None:
@@ -179,6 +192,58 @@ class _Shimmer:
         self.ui.thought_stream_end(thought)
 
 
+# ---------------------------------------------------------------------------
+# Worker: consumes the task queue so typing stays live during a run
+# ---------------------------------------------------------------------------
+def _make_worker(agent: Agent, ui: UI, task_queue: "queue.Queue[str]") -> threading.Thread:
+    from . import voice  # late import: optional engines
+
+    def _finish_turn(final: str) -> None:
+        uimod = _ui
+        if final and final not in ("(no final answer produced)", "(interrupted by user)"):
+            print(f"\n{uimod.ACCENT}❯{RESET} {BOLD}{final}{RESET}\n")
+            ui.last_final = final
+            if config.Config().get("auto_copy", True):
+                try:
+                    uimod.copy_to_clipboard(final)
+                    print(f"{uimod.MUTED}  ⧉ copied to clipboard — /copy to re-copy · /expand for full tool output{RESET}")
+                except Exception:
+                    pass
+            voice.speak(final, block=False)
+        elif final == "(interrupted by user)":
+            print(f"\n{uimod.GOLD}⚠ task stopped — queue still live, type the next thing{RESET}\n")
+
+    def _run() -> None:
+        while True:
+            text = task_queue.get()
+            try:
+                if text is None:
+                    return
+                # Animated thinking shimmer around the run
+                shimmer = _Shimmer(ui)
+                try:
+                    shimmer.start()
+                    final = agent.run_turn(text)
+                finally:
+                    thought = ""
+                    try:
+                        thought = next(
+                            (m["content"] for m in reversed(agent.history) if m.get("role") == "assistant"),
+                            "",
+                        )[:70]
+                    except Exception:
+                        pass
+                    shimmer.stop(thought)
+                _finish_turn(final)
+            except Exception as exc:
+                ui.render_error(f"task failed: {exc}")
+            finally:
+                task_queue.task_done()
+
+    t = threading.Thread(target=_run, name="claume-worker", daemon=True)
+    return t
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -209,7 +274,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # pixel bot greets you
     if not quiet:
-        ui.mascot.show(mood="idle", note="type a task, /hear to speak, or /help")
+        ui.mascot.show(mood="idle", note="type a task — keep typing while it works")
 
     _first_run_setup()
     _ensure_nvidia_key_interactive()
@@ -233,14 +298,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         agent.history.append({"role": "user", "content": md_note + "\n\n(apply these to all future turns)"})
         print(f"{_ui.GREY}  loaded project instructions from CLAUUME.md/CLAUDE.md{RESET}\n")
 
-    from . import llm  # late import keeps startup snappy
     from . import voice  # late import: optional engines
+
+    # Task queue + worker: the REPL never blocks on a running task
+    task_queue: "queue.Queue[str]" = queue.Queue()
+    worker = _make_worker(agent, ui, task_queue)
+    worker.start()
 
     use_input_box = bool(config.Config().get("input_box", True)) and not quiet
 
+    def _echo_typed(line: str) -> None:
+        """Echo what the user typed mid-run so the transcript reads correctly."""
+        if not ui.quiet:
+            print(f"{_ui.MUTED}│{RESET} {_ui.SILVER}{line}{RESET}")
+
     while True:
-        # --- Freebuff-style input box -------------------------------
-        if use_input_box:
+        busy = agent.is_busy() or not task_queue.empty()
+
+        # --- prompt (Freebuff-style box when idle, live prompt when busy)
+        if busy:
+            prompt = _ui.busy_prompt()
+        elif use_input_box:
             session_label = ""
             try:
                 if agent.session_id:
@@ -256,17 +334,30 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         try:
             line = input(prompt).strip()
-        except (EOFError, KeyboardInterrupt):
-            # First ctrl+c during input: hint instead of quitting (Claude-Code-like)
-            print(f"\n{_ui.GREY}press ctrl+c again or /exit to quit · Shift+Tab to change mode{RESET}")
+        except EOFError:
+            print(f"\n{_ui.GREY}bye ✦{RESET}")
+            task_queue.put(None)
+            agent.request_interrupt()
+            worker.join(timeout=5)
+            voice.wait_until_done(timeout=3)
+            return 0
+        except KeyboardInterrupt:
+            if busy:
+                # first ctrl+c while running = skip the current task
+                agent.request_interrupt()
+                print(f"\n{_ui.GOLD}⚠ skip requested — stopping current task (queue stays live){RESET}")
+                continue
+            print(f"\n{_ui.GREY}press ctrl+c again or /exit to quit · /skip stops a running task{RESET}")
             try:
-                line = input(ui.prompt_symbol()).strip()
+                line = input(prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 print(f"\n{_ui.GREY}bye ✦{RESET}")
+                task_queue.put(None)
+                worker.join(timeout=5)
                 voice.wait_until_done(timeout=3)
                 return 0
         finally:
-            if use_input_box:
+            if use_input_box and not busy:
                 _ui.input_box_bottom()
 
         if not line:
@@ -277,55 +368,54 @@ def main(argv: Optional[List[str]] = None) -> int:
             _cycle_mode(agent)
             continue
 
+        # --- live routing: commands that make sense mid-run ----------
+        low = line.lower()
+        if low.startswith("/skip") or low in ("skip", "stop"):
+            if agent.is_busy():
+                agent.request_interrupt()
+                print(f"{_ui.GOLD}⚠ skip requested — stopping current task{RESET}")
+            else:
+                print(f"{_ui.GREY}nothing running — type a task{RESET}")
+            continue
+        if low.startswith("/ask ") or low == "/ask":
+            q = line[5:].strip()
+            if not q:
+                print(f"{_ui.RED}usage: /ask <question>{RESET}")
+            else:
+                commands.cmd_ask([q], agent)
+            continue
+        if low.startswith("/queue "):
+            t = line[7:].strip()
+            if t:
+                task_queue.put(t)
+                _echo_typed(f"queued: {t}")
+            continue
+
         if line.startswith("/"):
             try:
+                if agent.is_busy() and low in ("/new",):
+                    print(f"{_ui.GOLD}⚠ a task is running — /skip first, then /new{RESET}")
+                    continue
                 commands.handle_command(line, agent)
             except SystemExit:
                 print(f"{_ui.GREY}bye ✦{RESET}")
+                task_queue.put(None)
+                agent.request_interrupt()
+                worker.join(timeout=5)
                 voice.wait_until_done(timeout=3)
                 return 0
             except Exception as exc:
                 ui.render_error(f"command failed: {exc}")
             continue
 
-        # Regular user prompt → agent turn (animated thinking shimmer)
-        shimmer = _Shimmer(ui)
-        try:
-            shimmer.start()
-            final = agent.run_turn(line)
-        finally:
-            thought = ""
-            try:
-                last_assistant = next(
-                    (m["content"] for m in reversed(agent.history) if m.get("role") == "assistant"),
-                    "",
-                )
-                thought = last_assistant[:70]
-            except Exception:
-                thought = ""
-            shimmer.stop(thought)
-
-        uimod = _ui  # live theme constants (survive /theme switches)
-
-        if final and final not in ("(no final answer produced)", "(interrupted by user)"):
-            print(f"\n{uimod.ACCENT}❯{RESET} {BOLD}{final}{RESET}\n")
-            ui.last_final = final
-            # auto-copy final answers to clipboard
-            if config.Config().get("auto_copy", True):
-                try:
-                    copy_to_clipboard = uimod.copy_to_clipboard
-                    copy_to_clipboard(final)
-                    print(f"{uimod.MUTED}  ⧉ copied to clipboard — /copy to re-copy · /expand for full tool output{RESET}")
-                except Exception:
-                    pass
-            # AI voice response (only when /voice on)
-            voice.speak(final, block=False)
+        # Plain text: if busy → queue it; else → run now via the queue too
+        # (the queue IS the runner; typing always stays live).
+        if busy:
+            task_queue.put(line)
+            _echo_typed(f"queued: {line}")
+            print(f"{_ui.GREY}  (position {task_queue.qsize()} in queue — /skip cancels the current task){RESET}")
         else:
-            print()
-
-        # gentle mascot nudge after long tasks
-        if not quiet and final and final != "(no final answer produced)":
-            pass  # mascot stays idle; /mascot shows it on demand
+            task_queue.put(line)
 
 
 def _cycle_mode(agent: Agent) -> None:

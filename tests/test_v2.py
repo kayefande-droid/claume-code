@@ -113,8 +113,14 @@ class TestThemes(unittest.TestCase):
     def test_banner_spells_claume(self):
         from claume.ui import _BANNER
 
-        # row 1 has the C L A U M E tops: C, L, A, U, M, E
-        self.assertIn("███████╗███████╗", _BANNER[0])  # A and E tops
+        # 6 rows, and the final glyph is a proper E (ANSI-Shadow):
+        # top ███████╗ · mid-left ██╔════╝ · bottom ╚══════╝
+        self.assertEqual(len(_BANNER), 6)
+        self.assertTrue(_BANNER[0].rstrip().endswith("███████╗"))   # E top
+        self.assertTrue(_BANNER[3].rstrip().endswith("██╔══╝"))     # E stem
+        self.assertTrue(_BANNER[5].rstrip().endswith("╚══════╝"))   # E bottom
+        # the old buggy glyphs (extra S column) must be gone
+        self.assertNotIn("╚════██║╚════██║", _BANNER[3])
 
 
 class TestMascot(unittest.TestCase):

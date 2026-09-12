@@ -1,15 +1,15 @@
 # claume-code
 
 ```
- ██████╗██╗      █████╗ ██╗   ██╗███╗   ███╗███████╗███████╗
-██╔════╝██║     ██╔══██╗██║   ██║████╗ ████║██╔════╝██╔════╝
-██║     ██║     ███████║██║   ██║██╔████╔██║███████╗█████╗
-██║     ██║     ██╔══██║██║   ██║██║╚██╔╝██║╚════██║╚════██║
-╚█████╗ ███████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║███████║███████║
- ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝╚══════╝
+ ██████╗██╗      █████╗ ██╗   ██╗███╗   ███╗███████╗
+██╔════╝██║     ██╔══██╗██║   ██║████╗ ████║██╔════╝
+██║     ██║     ███████║██║   ██║██╔████╔██║█████╗
+██║     ██║     ██╔══██║██║   ██║██║╚██╔╝██║██╔══╝
+╚█████╗ ███████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║███████╗
+ ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝
 ```
 
-**claume-code v2.1** is a pixel-animated **desktop CLI coding agent** (not a web app)
+**claume-code v2.2** is a pixel-animated **desktop CLI coding agent** (not a web app)
 that builds full projects from natural-language prompts — inspired by Claude Code and
 Freebuff, powered **free** by NVIDIA NIM through the built-in **free-claume proxy**.
 claume always identifies as **claume** — never Claude.
@@ -83,6 +83,22 @@ claume
 ❯ /proxy-ui        ← admin UI in your browser: paste key, pick model, Apply
 ❯ /effort ultra    ← maximum effort: 90 steps, 160 tool calls, 12 auto-continues
 ```
+
+### Live-input REPL — type while it works (Freebuff-style)
+
+The prompt never blocks. While a task runs you can keep typing:
+
+```
+❯ build the dashboard            ← starts working immediately
+│ + queue the API refactor       ← plain text while busy → queued (runs next)
+│ + /ask what does mcp mean?     ← side question, answered WITHOUT touching the task
+│ + /skip                        ← interrupts the running task; queue stays live
+```
+
+* `│ +` is the live prompt shown while a task is running — anything goes in:
+  plain text (queued), `/ask` (parallel side question), `/skip` (interrupt).
+* ctrl+c while busy = skip the current task (press twice to quit).
+* Tool output shows `… +N more lines — /expand` hints; `/expand on` opens them up.
 
 ### Permission modes (Shift+Tab cycles, like Claude Code)
 

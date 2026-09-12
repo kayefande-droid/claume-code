@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -70,7 +71,26 @@ class Agent:
         # Loop guards
         self._last_action_key = ""
         self._last_action_error_count = 0
+        # Live-input support: the REPL stays interactive while a task runs.
+        self._interrupt_event = threading.Event()
+        self._busy = False
         self._apply_effort_budget()
+
+    # ------------------------------------------------------------------
+    # Live-input: interrupt + busy state (thread-safe)
+    # ------------------------------------------------------------------
+    def request_interrupt(self) -> None:
+        """Ask the running turn to stop at the next step boundary."""
+        self._interrupt_event.set()
+
+    def is_busy(self) -> bool:
+        return self._busy
+
+    def _check_interrupt(self) -> bool:
+        if self._interrupt_event.is_set():
+            self._interrupt_event.clear()
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Effort → budgets
@@ -146,6 +166,13 @@ class Agent:
     # ------------------------------------------------------------------
     def run_turn(self, user_text: str) -> str:
         self.history.append({"role": "user", "content": user_text})
+        self._busy = True
+        try:
+            return self._run_turn_inner()
+        finally:
+            self._busy = False
+
+    def _run_turn_inner(self) -> str:
         final_text = ""
         self._tool_calls = 0
         self._continues_used = 0
@@ -166,6 +193,11 @@ class Agent:
             )
 
         while True:
+            # --- live interrupt (/skip or ctrl+c from the REPL) ---------
+            if self._check_interrupt():
+                self.ui.render_warning("task interrupted — queue stays live")
+                break
+
             # --- cap checks -------------------------------------------
             if self.step >= self.max_steps or self._tool_calls >= self._tool_cap:
                 if self._continues_used < self._max_continues:
@@ -430,6 +462,7 @@ class Agent:
     def reset(self) -> None:
         self.history.clear()
         self.step = 0
+        self._interrupt_event.clear()
 
     def set_mode(self, mode: str) -> None:
         if mode in ("manual", "accept", "plan", "auto"):

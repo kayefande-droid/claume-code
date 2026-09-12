@@ -35,6 +35,9 @@ HELP_LINES = [
     f"  {MINT}/expand{RESET} [on|off]  show full tool output (default: 14 lines)",
     f"  {MINT}/copy{RESET} [text]      copy the last answer (or given text) to clipboard",
     f"  {MINT}/copymode{RESET}         click-and-pull copy: drag-select text → clipboard",
+    f"  {MINT}/ask{RESET} <question>    side question — answered mid-task without hindering it",
+    f"  {MINT}/skip{RESET}              interrupt the running task (queue stays live)",
+    f"  {MINT}/queue{RESET}             explain the live task queue",
     f"  {MINT}/mascot{RESET}           show the claume pixel bot (eyes follow your mouse)",
     f"  {MINT}/voice{RESET} [on|off]   AI voice responses (British male/female accents)",
     f"  {MINT}/voice-accent{RESET} <a> male-british | female-british | male | female",
@@ -345,6 +348,50 @@ def cmd_copymode(ui: Any) -> None:
     from .ui import copy_mode
 
     copy_mode()
+
+
+# ---------------------------------------------------------------------------
+# Live-input helpers: side questions + task queue visibility
+# ---------------------------------------------------------------------------
+def cmd_ask(args: List[str], agent: "Agent") -> None:
+    """Answer a side question WITHOUT touching the task conversation.
+
+    Uses a separate mini-LLM call so the running task's history, step
+    budget and observations are untouched — a true parallel ask, like
+    Freebuff's side-chat while an agent works.
+    """
+    from . import llm
+    from .ui import BLUE, ITALIC, MUTED
+
+    q = " ".join(args)
+    if not q:
+        print(f"{RED}usage: /ask <question>{RESET}")
+        return
+
+    print(f"{BLUE}❓ {q}{RESET}")
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are claume. Answer the user's side question in at most "
+                "6 short lines. You are mid-task on something else — do NOT "
+                "attempt any actions, just answer. Plain text, no JSON envelope."
+            ),
+        },
+        {"role": "user", "content": q},
+    ]
+    try:
+        answer = llm.stream_chat(messages, effort="fast", on_token=None)
+        for ln in answer.strip().splitlines()[:10]:
+            print(f"{MUTED}│{RESET} {ITALIC}{ln[:140]}{RESET}")
+        print(f"{GREY}  (side answer — the running task was not affected){RESET}")
+    except llm.LLMError as exc:
+        print(f"{RED}✗ side question failed: {exc}{RESET}")
+
+
+def cmd_queue(args: List[str], agent: "Agent") -> None:
+    print(f"{GREY}queue lives in the REPL — type a task any time, even while another runs.{RESET}")
+    print(f"{GREY}  plain text while busy → queued · /ask <q> → side question · /skip → stop current{RESET}")
 
 
 # ---------------------------------------------------------------------------
@@ -1159,6 +1206,10 @@ def handle_command(line: str, agent: "Agent") -> bool:
         cmd_copy(args, agent.ui)
     elif name == "copymode":
         cmd_copymode(agent.ui)
+    elif name == "ask":
+        cmd_ask(args, agent)
+    elif name == "queue":
+        cmd_queue(args, agent)
     elif name == "mascot":
         cmd_mascot(agent.ui)
     elif name == "voice":
