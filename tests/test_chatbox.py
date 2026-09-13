@@ -2,7 +2,10 @@
 ghost suggestions, and renderer helpers (pure logic, no tty needed)."""
 from __future__ import annotations
 
+import os
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -496,6 +499,100 @@ class TestPinboxGeometry(unittest.TestCase):
         plain = "".join(self.fake.data)
         plain = plain.replace("\x1b[38;5;240m", "").replace("\x1b[0m", "")
         self.assertIn("task running", plain)
+
+
+class TestIdeIntegration(unittest.TestCase):
+    """v2.4.0: IDE detection, open-at-line, atomic writes."""
+
+    def test_detect_shape(self):
+        from claume import ide
+
+        info = ide.detect()
+        self.assertEqual(set(info), {"name", "kind", "cli", "open_support"})
+        self.assertIn(info["kind"], ("vscode", "jetbrains", "external"))
+
+    def test_detect_vscode_marker(self):
+        from claume import ide
+
+        old = {
+            k: os.environ.get(k)
+            for k in ("TERM_PROGRAM", "CURSOR_TRACE_ID", "VSCODE_GIT_ASKPASS_NODE")
+        }
+        try:
+            os.environ["TERM_PROGRAM"] = "vscode"
+            os.environ.pop("CURSOR_TRACE_ID", None)
+            info = ide.detect()
+            self.assertEqual(info["name"], "VS Code")
+            self.assertEqual(info["kind"], "vscode")
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_detect_cursor_over_vscode(self):
+        from claume import ide
+
+        old = {k: os.environ.get(k) for k in ("CURSOR_TRACE_ID", "TERM_PROGRAM")}
+        try:
+            os.environ["CURSOR_TRACE_ID"] = "1"
+            os.environ["TERM_PROGRAM"] = "vscode"
+            self.assertEqual(ide.detect()["name"], "Cursor")
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_detect_jetbrains_terminal(self):
+        from claume import ide
+
+        old = os.environ.get("TERMINAL_EMULATOR")
+        try:
+            os.environ["TERMINAL_EMULATOR"] = "JetBrains-JediTerm"
+            info = ide.detect()
+            self.assertEqual(info["kind"], "jetbrains")
+        finally:
+            if old is None:
+                os.environ.pop("TERMINAL_EMULATOR", None)
+            else:
+                os.environ["TERMINAL_EMULATOR"] = old
+
+    def test_open_file_missing_guard(self):
+        from claume import ide
+
+        msg, err = ide.open_file("Z:/definitely/missing.py")
+        self.assertTrue(err)
+        self.assertIn("not found", msg)
+
+    def test_atomic_write_replaces_cleanly(self):
+        from claume.tools import fs
+
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            (tmp / "src").mkdir()
+            target = tmp / "src" / "app.py"
+            target.write_text("print('v1')\n", encoding="utf-8")
+            msg, err = fs.write_file(tmp, "src/app.py", "print('v2')\n")
+            self.assertFalse(err)
+            self.assertEqual(target.read_text(encoding="utf-8"), "print('v2')\n")
+            leftovers = [p for p in (tmp / "src").iterdir() if p.suffix == ".tmp"]
+            self.assertEqual(leftovers, [])
+
+            msg, err = fs.patch_file(tmp, "src/app.py", "v2", "v3")
+            self.assertFalse(err)
+            self.assertIn("v3", target.read_text(encoding="utf-8"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_ide_tools_registered(self):
+        from claume.tools import registry
+
+        self.assertIn("ide_open", registry.REGISTRY)
+        self.assertIn("ide_reveal", registry.REGISTRY)
+        self.assertIn("ide_open(path", registry.schemas())
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 """Filesystem tools for the agent: read, write, patch, list, mkdir."""
 from __future__ import annotations
 
+import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -38,12 +40,36 @@ def read_file(base: Path, path: str, offset: int = 1, limit: int = 2000) -> Tupl
 
 
 def write_file(base: Path, path: str, content: str) -> Tuple[str, bool]:
-    """Create/overwrite a file (parents auto-created). Returns (msg, is_error)."""
+    """Create/overwrite a file (parents auto-created). Returns (msg, is_error).
+
+    Writes are ATOMIC (temp file + os.replace): IDE file watchers
+    (VS Code, JetBrains, Android Studio) see a clean create/replace event
+    and hot-reload the editor buffer without partial-read glitches.
+    """
     fp = _resolve(base, str(path))
     try:
         fp.parent.mkdir(parents=True, exist_ok=True)
         existed = fp.exists()
-        fp.write_text(str(content), encoding="utf-8")
+        # atomic replace: same-directory temp + os.replace is atomic on
+        # Windows and POSIX, and preserves the target's permissions.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(fp.parent), prefix=f".{fp.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as tmp:
+                tmp.write(str(content))
+            if existed:
+                try:
+                    os.chmod(tmp_name, fp.stat().st_mode)
+                except Exception:
+                    pass
+            os.replace(tmp_name, fp)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except Exception:
+                pass
+            raise
         lines = str(content).count("\n") + 1
         verb = "updated" if existed else "created"
         return f"{verb} {fp} ({lines} lines, {len(content)} bytes)", False
@@ -79,12 +105,35 @@ def patch_file(base: Path, path: str, old_string: str, new_string: str, allow_mu
         )
     if count > 1 and allow_multiple:
         text = text.replace(old, new)
-        fp.write_text(text, encoding="utf-8")
-        return f"patched {count} occurrence(s) in {fp}", False
+        return _atomic_write(fp, text, f"patched {count} occurrence(s) in {fp}")
 
     text = text.replace(old, new, 1)
-    fp.write_text(text, encoding="utf-8")
-    return f"patched {fp} (1 occurrence)", False
+    return _atomic_write(fp, text, f"patched {fp} (1 occurrence)")
+
+
+def _atomic_write(fp: Path, content: str, message: str) -> Tuple[str, bool]:
+    """Same-directory temp + os.replace: IDE watchers see one clean event."""
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(fp.parent), prefix=f".{fp.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as tmp:
+                tmp.write(content)
+            try:
+                os.chmod(tmp_name, fp.stat().st_mode)
+            except Exception:
+                pass
+            os.replace(tmp_name, fp)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except Exception:
+                pass
+            raise
+        return message, False
+    except Exception as exc:
+        return f"error: cannot write {fp}: {exc}", True
 
 
 def list_directory(base: Path, path: str = ".", recursive: bool = False) -> Tuple[str, bool]:

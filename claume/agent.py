@@ -112,6 +112,14 @@ class Agent:
     # ------------------------------------------------------------------
     def _context_block(self) -> str:
         extra = f"- Permission mode: {self.mode}"
+        try:
+            from . import ide as _ide
+
+            ide_note = _ide.context_note()
+            if ide_note:
+                extra += f"\n{ide_note}"
+        except Exception:
+            pass
         mcp_status = ""
         try:
             servers = self.cfg.get("mcp_servers", {})

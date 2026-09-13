@@ -132,6 +132,12 @@ def _print_context_line(workspace: Path) -> None:
     cfg = config.Config()
     uimod = _ui
 
+    try:
+        from . import ide as _ide
+
+        print(f"{_ui.GREY}  {_ide.status_line()}{RESET}")
+    except Exception:
+        pass
     if cfg.get("provider") == "nvidia":
         base = f"http://{cfg.get('proxy_host', '127.0.0.1')}:{cfg.get('proxy_port', 8000)}/v1"
         if proxy.is_running():

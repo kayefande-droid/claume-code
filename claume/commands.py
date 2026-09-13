@@ -54,6 +54,7 @@ HELP_LINES = [
     f"  {MINT}/agents{RESET} <t1>; <t2>  run parallel subagents and merge reports",
     f"  {MINT}/design{RESET} <prompt>  run the MCP design pipeline (Link System)",
     f"  {MINT}/image{RESET} <path>    attach an image (png/jpg/webp) to your next task",
+    f"  {MINT}/ide{RESET}            IDE integration status · /ide open <path> [line] · /ide reveal <path>",
     f"  {MINT}/webdesign{RESET} <prompt>  build a website/UI now — studio brief + real fonts/assets",
     f"  {MINT}/mcp-preset{RESET} <name>  install a server preset (design)",
     f"  {MINT}/keys{RESET}             list vaulted API keys (masked)",
@@ -1159,6 +1160,35 @@ def cmd_design(args: List[str], agent: "Agent") -> None:
 # ---------------------------------------------------------------------------
 # /image — attach an image file to the NEXT task (vision models)
 # ---------------------------------------------------------------------------
+def cmd_ide(args: List[str]) -> None:
+    """Show hosting-IDE integration status; /ide open <path> [line] jumps."""
+    from . import ide as _ide
+
+    info = _ide.detect()
+    print(f"{ACCENT}⌘ ide{RESET} {BOLD}{info['name']}{RESET} {GREY}({info['kind']}){RESET}")
+    if info.get("cli"):
+        print(f"{GREY}  launcher:{RESET} {MINT}{info['cli']}{RESET}")
+    print(f"{GREY}  file edits hot-reload in the editor (atomic writes){RESET}")
+    if info.get("open_support"):
+        print(f"{GREY}  jump-to-code:{RESET} {MINT}/ide open <path> [line]{RESET} {GREY}— opens at line in the IDE{RESET}")
+        print(f"{GREY}  reveal:{RESET} {MINT}/ide reveal <path>{RESET} {GREY}— show in the explorer / file manager{RESET}")
+    else:
+        print(f"{GREY}  no IDE launcher on PATH — files open with the OS default{RESET}")
+    if args and args[0] in ("open", "reveal"):
+        if len(args) < 2:
+            print(f"{RED}usage: /ide {args[0]} <path>[+line]{RESET}")
+            return
+        path = args[1]
+        line = 0
+        if len(args) > 2 and args[2].isdigit():
+            line = int(args[2])
+        if args[0] == "open":
+            msg, err = _ide.open_file(path, line)
+        else:
+            msg, err = _ide.reveal(path)
+        (print if not err else lambda m: print(f"{RED}{m}{RESET}"))(msg)
+
+
 def cmd_image(args: List[str]) -> None:
     from . import chatbox as _cb
 
@@ -1308,6 +1338,8 @@ def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
         cmd_agents(args, agent)
     elif name == "image":
         cmd_image(args)
+    elif name == "ide":
+        cmd_ide(args)
     elif name == "design":
         cmd_design(args, agent)
     elif name == "webdesign":

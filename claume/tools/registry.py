@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import fs, shell, web
+from .. import ide
 
 
 class Tool:
@@ -136,6 +137,29 @@ def _delete(base: Path, **kw: Any) -> Tuple[str, bool]:
 )
 def _grep(base: Path, **kw: Any) -> Tuple[str, bool]:
     return fs.search_text(base, kw["pattern"], kw.get("path", "."))
+
+
+# --------------------------------------------------------------------------
+# IDE integration — jump to edited code inside the hosting IDE
+# --------------------------------------------------------------------------
+@register(
+    "ide_open",
+    "Open a file in the hosting IDE (VS Code/Cursor/JetBrains/Android Studio) at line:col — use after edits to jump to changed code.",
+    {"path": "File path", "line": "Line number (1-based, optional)", "col": "Column (optional)"},
+    ["path"],
+)
+def _ide_open(base: Path, **kw: Any) -> Tuple[str, bool]:
+    return ide.open_file(kw["path"], int(kw.get("line", 0) or 0), int(kw.get("col", 0) or 0))
+
+
+@register(
+    "ide_reveal",
+    "Reveal a file/folder in the IDE explorer or OS file manager.",
+    {"path": "File or directory path"},
+    ["path"],
+)
+def _ide_reveal(base: Path, **kw: Any) -> Tuple[str, bool]:
+    return ide.reveal(kw["path"])
 
 
 # --------------------------------------------------------------------------

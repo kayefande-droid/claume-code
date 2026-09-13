@@ -58,13 +58,23 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 irm https://raw.githubusercontent.com/kayefande-droid/claume-code/main/install.ps1 | iex
 ```
 
-Both options install the newest code on the repo — the one-liner downloads
-`main` fresh every run, and Option A copies the folder you have (run `git pull`
-first if your local clone is stale). The installer copies the app to
-`%USERPROFILE%\.claume`, creates an isolated venv, installs dependencies
-(**stdlib-only — nothing heavy**), stages the bundled ui-ux-pro-max design skill,
-and registers the `claume` command on your user PATH. Then open a **new**
-PowerShell tab and run:
+### Linux / macOS (and WSL)
+
+```bash
+# from a cloned folder
+cd claume-code && bash install.sh
+
+# or the one-liner (always the latest version)
+curl -fsSL https://raw.githubusercontent.com/kayefande-droid/claume-code/main/install.sh | bash
+```
+
+Installs to `~/.claume` (isolated venv, stdlib-only), adds `~/.claume/bin`
+to your PATH via your shell rc, and works in bash/zsh. On iPhones/iPads,
+run it on a Linux box (or VPS) and connect from **a-Shell / Blink Shell
+over SSH** — the full chat box works in Blink.
+
+All installers pull `main` fresh every run, so you always get the newest
+version — never a stale release. Then open a **new** terminal and run:
 
 ```powershell
 claume
@@ -319,13 +329,36 @@ you repeating it. Skills are clearly separated from MCP tools: a skill is
 instructions + scripts; MCP servers provide callable tools named
 `mcp_<server>_<tool>`.
 
+## IDE integration (VS Code · Cursor · PyCharm · IntelliJ · Android Studio)
+
+Run `claume` inside any IDE's **integrated terminal** and it attaches to
+its host automatically:
+
+* **Live detection** — VS Code/Cursor (`TERM_PROGRAM`, `CURSOR_TRACE_ID`),
+  JetBrains family (`JetBrains-JediTerm`, IntelliJ markers), Android
+  Studio. `/ide` shows what was detected; the boot line reports it too.
+* **Real-time project editing** — every `write_file`/`patch_file` is an
+  **atomic replace** (temp file + `os.replace`), so IDE file-watchers see
+  one clean event and hot-reload the editor buffer instantly — build,
+  edit, create and add files while your project is open, no stale-buffer
+  conflicts.
+* **Jump-to-code** — after edits, claume opens the changed file at the
+  exact line in the IDE (`code --goto file:line:col`, JetBrains `--line`)
+  via the `ide_open` tool or `/ide open <path> [line]`. `/ide reveal`
+  exposes files/folders in the explorer.
+* **IDE tools at the model's fingertips** — the context block tells the
+  model which IDE is live so it uses the right launchers; run builds,
+  test suites and package managers through `execute_command` in the same
+  environment your IDE uses.
+
 ## Built-in tools
 
 `read_file` · `write_file` · `patch_file` (surgical edits) · `list_directory` ·
 `tree_view` · `make_directory` · `delete_path` · `search_text` (grep) ·
 `execute_command` (foreground + background for dev servers) · `background_output` ·
 `background_stop` · `git_clone` · `git_commit` · `git_status` · `web_search` ·
-`fetch_url` · `spawn_subagents` (parallel task agents) · plus every tool from
+`fetch_url` · `spawn_subagents` (parallel task agents) · `ide_open` ·
+`ide_reveal` (jump to edited code in the hosting IDE) · plus every tool from
 connected MCP servers (bridged automatically as `mcp_<server>_<tool>`).
 
 **Safety:** every command is classified `safe / caution / destructive`
