@@ -143,6 +143,14 @@ def list_sessions(limit: int = 20) -> List[Dict[str, Any]]:
             updated = data.get("updated", p.stat().st_mtime)
             project = data.get("project") or "(no project)"
             name = data.get("name") or ""
+            # What claume physically did in this session (files, commands,
+            # MCP calls…) — best-effort, never breaks listing.
+            try:
+                from . import activity as _activity
+
+                act = _activity.summary(data.get("id", p.stem))
+            except Exception:
+                act = ""
             entries.append(
                 {
                     "id": data.get("id", p.stem),
@@ -151,6 +159,7 @@ def list_sessions(limit: int = 20) -> List[Dict[str, Any]]:
                     "project": project,
                     "name": name,
                     "title": title,
+                    "activity": act,
                     "turns": sum(
                         1
                         for m in msgs

@@ -94,10 +94,14 @@ def main() -> int:
             print(_c(f"[FAIL] {name}::{tool}: {exc}", RED))
             failures.append(f"{name}::{tool}")
 
-    # 3) full pipeline
+    # 3) full pipeline — count real stage markers ('✓ <server>::<tool>' at
+    # line start), NOT every ✓ in the report (tool payload text can contain
+    # checkmarks too, which made this check falsely pass before v2.3).
     try:
+        import re
+
         report, is_err = mcp.design_pipeline("smoke test dashboard hero", Path("."))
-        stages_ok = report.count("✓")
+        stages_ok = len(re.findall(r"(?m)^✓ \S+::", report))
         if is_err or stages_ok < 4:
             print(_c(f"[FAIL] Link System pipeline: only {stages_ok}/4 stages OK", RED))
             failures.append("pipeline")

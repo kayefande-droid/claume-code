@@ -9,21 +9,24 @@
  ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝
 ```
 
-**claume-code v2.2** is a pixel-animated **desktop CLI coding agent** (not a web app)
+**claume-code v2.3** is a pixel-animated **desktop CLI coding agent** (not a web app)
 that builds full projects from natural-language prompts — inspired by Claude Code and
 Freebuff, powered **free** by NVIDIA NIM through the built-in **free-claume proxy**.
-claume always identifies as **claume** — never Claude.
+claume always identifies as **claume** — never Claude, never ChatGPT.
 
 > 🎬 Pixel banner + **mouse-tracking bot mascot** · 🧠 extended-thinking ReAct loop with
-> **animated ✻ thinking shimmer** · 🛠 18 built-in tools · 🌐 free-claume proxy
-> (OpenAI-compatible) · 🖥 admin UI at `/admin` · 🔐 local key vault
-> · 🧩 MCP client with **enabled/disabled + active/inactive status** + **Link System
-> design pipeline** · 📚 **skills system** (install from GitHub, .md instructions
-> adopted into every task) · 🎙 **AI voice out + voice commands** (British
-> male/female accents) · 💬 **Freebuff-style input box** · ⧉ **click-and-pull copy
-> mode** · 🎭 **4 permission modes** (manual / accept / plan / auto, Shift+Tab)
-> · 💾 **named persistent sessions** (project + time) · 🤖 parallel subagents
-> · 🎨 7 color themes · 🚀 **effort levels incl. ultra** · 🔁 self-update + **/reinstall**
+> **animated ✻ thinking shimmer** · 🛠 21 built-in tools · 🌐 free-claume proxy
+> (OpenAI-compatible) · 🖥 **claume studio** admin dashboard at `/admin` (explode-view,
+> live key health, model chain, design system) · 🔐 local key vault
+> · 🧩 MCP client with **auto-install into ~/.claume/mcp** + **Link System
+> design pipeline** · 📚 **skills system** (ui-ux-pro-max ships pre-activated)
+> · 🎨 **webstudio: pulls real Google Fonts + assets into your builds**
+> · 🎙 **AI voice out + voice commands** (British male/female accents)
+> · 💬 **Freebuff-style input box** · ⧉ **click-and-pull copy mode**
+> · 🎭 **4 permission modes** (manual / accept / plan / auto, Shift+Tab)
+> · 💾 **named persistent sessions with activity log** (see exactly what claume did)
+> · 🤖 parallel subagents · 🎨 7 color themes · 🚀 **effort levels incl. ultra**
+> · 🔁 self-update + **/reinstall** + **update checker in /admin**
 
 Default model: **`nvidia/nemotron-3-super-120b-a12b`** (FCC-style), with an
 ordered **fallback chain** — if a model is retired (410) or rate-limited, the
@@ -49,19 +52,27 @@ cd claume-code
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-**Option B — one-liner (once published to GitHub):**
+**Option B — one-liner (always the LATEST version — pulls the current main branch):**
 
 ```powershell
 irm https://raw.githubusercontent.com/kayefande-droid/claume-code/main/install.ps1 | iex
 ```
 
-The installer copies the app to `%USERPROFILE%\.claume`, creates an isolated venv,
-installs dependencies (**stdlib-only — nothing heavy**), and registers the `claume`
-command on your user PATH. Then open a **new** PowerShell tab and run:
+Both options install the newest code on the repo — the one-liner downloads
+`main` fresh every run, and Option A copies the folder you have (run `git pull`
+first if your local clone is stale). The installer copies the app to
+`%USERPROFILE%\.claume`, creates an isolated venv, installs dependencies
+(**stdlib-only — nothing heavy**), stages the bundled ui-ux-pro-max design skill,
+and registers the `claume` command on your user PATH. Then open a **new**
+PowerShell tab and run:
 
 ```powershell
 claume
 ```
+
+> Updating an existing install? Re-run the same command — it is idempotent and
+> replaces the app files while **keeping your config, vault, sessions and skills**.
+> `/admin` also shows whether a newer version is published (update checker).
 
 First run asks for your free `nvapi-…` key (get it at build.nvidia.com → any model
 → *Get API Key*). It's stored obfuscated in `%USERPROFILE%\.claume\vault.bin`.
@@ -75,12 +86,13 @@ claume
 ❯ clone https://github.com/pallets/flask and explain its structure
 ❯ fix the failing test in tests/ and make pytest pass
 ❯ create a REST API with fastapi + sqlite with tests
+❯ build me a luxurious portfolio site with real fonts and assets
 ❯ /mode plan       ← research first, present a plan, no writes
 ❯ /agents scan auth ; scan api ; scan db    ← parallel subagents, merged report
 ❯ /design fluid bento landing hero ← MCP design pipeline (Link System)
 ❯ /theme synthwave ← switch the whole terminal palette
-❯ /continue        ← pick up yesterday's session
-❯ /proxy-ui        ← admin UI in your browser: paste key, pick model, Apply
+❯ /continue        ← pick up yesterday's session (shows what it did last time)
+❯ /proxy-ui        ← claume studio dashboard: key health, model chain, design system
 ❯ /effort ultra    ← maximum effort: 90 steps, 160 tool calls, 12 auto-continues
 ```
 
@@ -117,7 +129,7 @@ Switch anytime: Shift+Tab (in-terminal) or `/mode <name>`.
 |---|---|
 | `/help` | all commands |
 | `/new` | fresh conversation |
-| `/model <name>` | pick model (e.g. `qwen/qwen3-coder-480b-a35b-instruct`) |
+| `/model <name>` | pick model (e.g. `openai/gpt-oss-120b`) |
 | `/recommend` | recommended free models |
 | `/effort fast\|balanced\|deep\|ultra` | thinking budget + step/tool budgets (ultra = 90 steps) |
 | `/mode <name>` | manual · accept · plan · auto (Shift+Tab cycles) |
@@ -131,17 +143,19 @@ Switch anytime: Shift+Tab (in-terminal) or `/mode <name>`.
 | `/voice-accent <a>` | `male-british` · `female-british` · `male` · `female` |
 | `/say <text>` | make claume speak text now |
 | `/hear` | one **voice command** (needs `pip install SpeechRecognition pyaudio`) |
-| `/session [id]` · `/sessions` | session list **grouped by project with timestamps** |
+| `/session [id]` · `/sessions` | session list **grouped by project with timestamps + activity** |
 | `/rename <project> [name]` | rename the current session (or `/rename - <id> …`) |
 | `/resume` · `/continue` | persistent chat history (`claume --continue` on boot) |
 | `/agents t1 ; t2 ; t3` | parallel subagents → merged report |
 | `/design <prompt>` | run the MCP Link System design pipeline |
+| `/webdesign <prompt>` | build a website/UI now — studio brief + real fonts/assets pulled in |
 | `/mcp-preset design` | install the UI stack: 21st.dev + reactbits + motion + shadcnspace |
 | `/mcp` | servers with **enabled/disabled + ACTIVE/INACTIVE** status and tool counts |
 | `/mcp-on <name>` · `/mcp-off <name>` | enable/disable a server (disabled = never spawns) |
 | `/mcp-key <server> [ENV]` | vault the key a server needs (injected at spawn, never in config) |
 | `/mcp-test [name]` | live handshake probe → `● ACTIVE` / `✗ INACTIVE` / `○ DISABLED` |
 | `/mcp-add` · `/mcp-del` | register/remove servers |
+| *(npm servers)* | npx-style servers **auto-install into `~/.claume/mcp/npm`** and launch via `node` — no global downloads |
 | `/skill <owner/repo>` | **install a skill from GitHub** (e.g. `nextlevelbuilder/ui-ux-pro-max-skill`) |
 | `/skills` | installed skills with ● active / ○ inactive status |
 | `/skill-on <name>` · `/skill-off <name>` | activate/deactivate — active skills' .md instructions guide every task |
@@ -150,7 +164,7 @@ Switch anytime: Shift+Tab (in-terminal) or `/mode <name>`.
 | `/skill-run <skill> <script> [args]` | run a bundled skill script |
 | `/skill-rm <name>` | remove an installed skill |
 | `/proxy` | start/reuse the free-claume proxy |
-| `/proxy-ui` | luxury dashboard in your browser |
+| `/proxy-ui` | claume studio dashboard in your browser |
 | `/keys` · `/key NAME` · `/key-del NAME` | manage the local key vault ("live space") |
 | `/provider <name>` | nvidia · groq · openrouter · deepseek · openai · mistral · together · fireworks |
 | `/doctor` | health check incl. **live MCP probe** (handshake + tools per server) |
@@ -274,7 +288,9 @@ orchestrates it in stages instead of treating servers as islands:
 ```
 
 Each stage feeds its output into the next; missing servers degrade gracefully
-(claume builds that part by hand, same quality bar).
+(claume builds that part by hand, same quality bar). The pipeline is verified
+live by `python tests/mcp_smoke_live.py` — all 4 stages green with real tool
+catalogs (10 + 34 + 9 + 5 tools).
 
 ## MCP server management
 
@@ -346,10 +362,56 @@ then set `"needs_key": "MY_SERVICE_API_KEY"` on the server entry (or run
 `/mcp-key my-service MY_SERVICE_API_KEY`). No secrets in dotfiles, no secrets
 in the repo.
 
-## Sessions — named by project, stamped by time
+### Where MCP servers are installed
+
+Every npm-based MCP server (`npx -y …` specs) is **auto-installed into the
+claume folder itself** — `~/.claume/mcp/npm` — and launched directly with
+`node`. Nothing is downloaded to global npm, and npx's flaky cold-start
+hangs are gone: first use installs the package once (30–60 s), every later
+start is instant. `animation-motion` ships the same way.
+
+```
+~/.claume/mcp/
+├── npm/            ← auto-installed MCP packages + node_modules (v2.3+)
+└── motion-dev-mcp/ ← bundled animation server
+```
+
+## Web design capability — claume studio
+
+claume builds **human-designed, luxurious** websites and app UIs — its own
+site included. Ask for a website and the studio machinery engages
+automatically:
+
+* **Real fonts, not suggestions** — `webstudio_pull_font` downloads the
+  actual Google Fonts CSS + woff2 files into `assets/fonts/` and rewrites
+  the CSS to reference them locally, so the site works offline with real
+  typography (Fraunces · Space Grotesk · JetBrains Mono by default).
+* **Real assets** — `webstudio_pull_asset` downloads images/logos/textures
+  into `assets/` instead of shipping gray placeholder boxes.
+* **The studio brief** — claume's own design language (editorial serif over
+  geometric sans, NVIDIA-green on near-black, glass-depth cards, explode-view
+  heroes, staggered entry motion) is injected into its system prompt for every
+  design-shaped task. The same brief is one click in the `/admin` dashboard
+  (Generate design brief → paste into claume).
+* **The Link System** — `/design <prompt>` runs the 4-stage MCP pipeline
+  (shadcnspace layout → 21st.dev components → motion.dev timelines →
+  reactbits canvas) and feeds the blueprints straight into the build.
+
+```
+❯ build me a luxurious portfolio website with real fonts and assets
+  ✓ atomic-shadcnspace::searchBlocks   hero layout blueprints
+  ✓ uidiscovery-21st::search           human-designed component blocks
+  ✓ animation-motion::search_motion_docs  motion timelines
+  ✓ microinteractions-reactbits::get_component_demo  canvas background
+  ✓ webstudio_pull_font Fraunces → assets/fonts/ (3 woff2, local CSS)
+  ✓ webstudio_pull_asset …
+```
+
+## Sessions — named by project, with an activity log
 
 Every session autosaves with its **project name** (defaults to the working
-folder) and human timestamps:
+folder) and human timestamps — plus a log of **what claume actually did**
+(files written, commands run, MCP tools called, web searches):
 
 ```
 /sessions
@@ -357,8 +419,10 @@ folder) and human timestamps:
 
   my-app
     20260912-140301-a1b2c3 12 Sep · 14:03 · 24 turns fix the login bug ← current
+      ↳ did: 6 file(s): auth.py, login.tsx +1 · 3 command(s) · 2 web call(s)
   experiments
     20260911-091500-d4e5f6 11 Sep · 09:15 · 3 turns try sqlite vs duckdb
+      ↳ did: 1 file(s): bench.py
 ```
 
 `/rename webapp "auth rewrite"` renames the current session;
@@ -388,13 +452,16 @@ claume-code/
 │   ├── prompts.py      system prompts + identity (claume, never claude) + mode blocks
 │   ├── llm.py          OpenAI-compatible client + provider map + model fallback chain
 │   ├── sessions.py     named sessions: project + timestamps + /rename
-│   ├── skills.py       GitHub skill installer: .md adoption + script runner
+│   ├── activity.py     per-session activity log (files/commands/MCP seen in /sessions)
+│   ├── skills.py       GitHub skill installer + bundled-skill seeding
+│   ├── webstudio.py    font/asset pulling + claume-studio design briefs
 │   ├── subagents.py    parallel multi-task agents + merge pass
-│   ├── mcp.py          MCP stdio JSON-RPC client + enable/disable + Link System
+│   ├── mcp.py          MCP stdio JSON-RPC client + npm auto-install (~/.claume/mcp)
+│   │                   + enable/disable + Link System
 │   ├── voice.py        TTS/STT: British voices, zero required deps
 │   ├── proxy.py        free-claume proxy (OpenAI → NVIDIA NIM, streaming,
 │   │                   retries, multi-key rotation, first-run key prompt)
-│   ├── proxy_ui.py     luxury browser dashboard
+│   ├── proxy_ui.py     claume studio dashboard (explode-view, key health, design system)
 │   ├── commands.py     /slash command handlers
 │   ├── security.py     command classifier (safe/caution/destructive) + redaction
 │   ├── keyvault.py     obfuscated local key store
@@ -426,7 +493,7 @@ It's also plain OpenAI on the wire, so any SDK works:
 
 ```powershell
 curl http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" `
-  -d '{\"model\":\"meta/llama-3.3-70b-instruct\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'
+  -d '{\"model\":\"openai/gpt-oss-120b\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'
 ```
 
 Any OpenAI SDK / tool (Aider, Cline, LlamaIndex…) can point at the proxy.

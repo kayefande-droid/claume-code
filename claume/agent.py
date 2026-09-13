@@ -74,6 +74,7 @@ class Agent:
         # Live-input support: the REPL stays interactive while a task runs.
         self._interrupt_event = threading.Event()
         self._busy = False
+        self._current_task_text = ""  # design-brief injection reads this
         self._apply_effort_budget()
 
     # ------------------------------------------------------------------
@@ -145,6 +146,13 @@ class Agent:
         except Exception:
             return ""
 
+    def _design_block(self) -> str:
+        """Studio design brief injected for website/UI tasks."""
+        try:
+            return prompts.build_design_block(getattr(self, "_current_task_text", ""))
+        except Exception:
+            return ""
+
     def _secrets(self) -> List[str]:
         """Collect secret values present locally so we can redact output."""
         if not self._secret_cache:
@@ -166,6 +174,7 @@ class Agent:
     # ------------------------------------------------------------------
     def run_turn(self, user_text: str) -> str:
         self.history.append({"role": "user", "content": user_text})
+        self._current_task_text = user_text
         self._busy = True
         try:
             return self._run_turn_inner()
@@ -184,6 +193,7 @@ class Agent:
         system_prompt = prompts.build_system_prompt(
             registry.schemas(), self._context_block(), mode=self.mode,
             skills_block=self._skills_block(),
+            design_block=self._design_block(),
         )
 
         # --- plan mode: force read-only research -----------------------
@@ -383,7 +393,43 @@ class Agent:
 
         result, is_err = registry.execute(self.workspace, action.tool, action.args)
         result = security.redact_secrets(result, self._secrets())
+        self._log_activity(action.tool, action.args, result, is_err)
         return result, is_err
+
+    def _log_activity(self, tool: str, args: Dict[str, Any], result: str, is_err: bool) -> None:
+        """Record what claume physically did, for /sessions activity display."""
+        try:
+            from . import activity
+
+            kind = "tool"
+            target = ""
+            if tool in ("write_file", "patch_file", "delete_path", "make_directory"):
+                kind = "file"
+                target = str(args.get("path", ""))
+            elif tool == "execute_command":
+                kind = "command"
+                target = str(args.get("command", ""))[:80]
+            elif tool.startswith("mcp_"):
+                kind = "mcp"
+                target = tool
+            elif tool in ("git_clone", "git_commit", "git_status"):
+                kind = "git"
+                target = tool
+            elif tool in ("web_search", "fetch_url"):
+                kind = "web"
+                target = str(args.get("query") or args.get("url", ""))[:80]
+            elif tool.startswith("webstudio_"):
+                kind = "design"
+                target = str(args.get("family") or args.get("url") or args.get("target", ""))[:80]
+            elif tool in ("read_file", "list_directory", "tree_view", "search_text"):
+                kind = "read"
+                target = str(args.get("path") or args.get("pattern", ""))[:80]
+            activity.record(
+                self.session_id or "", kind, tool=tool, target=target,
+                ok=not is_err, detail=result[:120],
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Subagents tool

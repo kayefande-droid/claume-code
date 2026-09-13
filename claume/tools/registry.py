@@ -241,6 +241,48 @@ def _fetch(base: Path, **kw: Any) -> Tuple[str, bool]:
 
 
 # --------------------------------------------------------------------------
+# Web studio — real font/asset pulling for website & UI builds
+# --------------------------------------------------------------------------
+@register(
+    "webstudio_pull_font",
+    "Pull a Google Fonts family (CSS + woff2 files) into assets/fonts/ so the "
+    "site works offline with real typography. Use for every website/UI build.",
+    {"family": "Font family name (e.g. 'Fraunces', 'Space Grotesk')", "weights": "Weights string (default '300;400;600;700')"},
+    ["family"],
+)
+def _pull_font(base: Path, **kw: Any) -> Tuple[str, bool]:
+    from .. import webstudio
+
+    return webstudio.pull_font(base, str(kw["family"]), str(kw.get("weights", "300;400;600;700")))
+
+
+@register(
+    "webstudio_pull_asset",
+    "Download a real asset (image/logo/svg/illustration/texture) into assets/ "
+    "so builds use real visuals instead of placeholder boxes.",
+    {"url": "http(s) URL of the asset", "name": "Optional local filename"},
+    ["url"],
+)
+def _pull_asset(base: Path, **kw: Any) -> Tuple[str, bool]:
+    from .. import webstudio
+
+    return webstudio.pull_asset(base, str(kw["url"]), str(kw.get("name", "")))
+
+
+@register(
+    "webstudio_design_brief",
+    "Return the claume-studio design brief (typography, palette, motion, "
+    "layout mechanics) to apply to a website/UI build.",
+    {"target": "What is being designed (e.g. 'claume website', 'portfolio for a photographer')"},
+    [],
+)
+def _design_brief(base: Path, **kw: Any) -> Tuple[str, bool]:
+    from .. import webstudio
+
+    return webstudio.studio_brief(str(kw.get("target", "")))
+
+
+# --------------------------------------------------------------------------
 # Multi-task subagents
 # --------------------------------------------------------------------------
 @register(

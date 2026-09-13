@@ -17,8 +17,14 @@ APP_DIR_NAME = ".claume"
 # every installed copy always knows where its source lives.
 REPO_URL = "https://github.com/kayefande-droid/claume-code.git"
 REPO_WEB = "https://github.com/kayefande-droid/claume-code"
+# Raw pyproject.toml — lets /admin + /doctor compare the running version
+# against the latest published one.
+RAW_PYPROJECT_URL = "https://raw.githubusercontent.com/kayefande-droid/claume-code/main/pyproject.toml"
 
 # NVIDIA NIM models confirmed gone (410 Gone - end of life).
+# GUARD: never list a model here that is also in proxy.DEFAULT_MODEL_POOL —
+# the fallback chain filters this set, so a wrong entry would silently
+# remove a working fallback from every request.
 DEAD_MODELS = {
     "meta/llama-3.3-70b-instruct",   # EOL 2026-08-26
 }

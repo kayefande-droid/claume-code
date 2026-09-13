@@ -191,6 +191,46 @@ def set_all_active(active: bool) -> int:
     return len(m)
 
 
+# Skill folders pre-seeded with the install (bundled in the repo under
+# skills/ and copied into ~/.claume/skills on first run).
+BUNDLED_SKILLS = ("ui-ux-pro-max-skill",)
+
+
+def seed_bundled_skills() -> List[str]:
+    """Copy bundled skills into the skills dir and activate them once.
+
+    Runs at REPL startup: makes the ui-ux-pro-max design skill work
+    out-of-the-box (its .md guidance + search scripts adopt into every
+    design task) instead of requiring a manual /skill install.
+    Returns the list of skills seeded/activated this run.
+    """
+    touched: List[str] = []
+    try:
+        import shutil
+
+        pkg_root = Path(__file__).resolve().parent.parent
+        bundled_root = pkg_root / "skills"
+        cfg = config.Config()
+        active_map = cfg.get("skills_active", {}) or {}
+        changed = False
+        for name in BUNDLED_SKILLS:
+            src = bundled_root / name
+            dest = skills_root() / name
+            if src.is_dir() and not dest.is_dir():
+                shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git"))
+                touched.append(f"seeded {name}")
+                changed = True
+            if dest.is_dir() and not active_map.get(name, False):
+                active_map[name] = True
+                changed = True
+                touched.append(f"activated {name}")
+        if changed:
+            cfg.set("skills_active", active_map)
+    except Exception:
+        pass
+    return touched
+
+
 # ---------------------------------------------------------------------------
 # Instruction injection — the ".md instruction file" adoption
 # ---------------------------------------------------------------------------

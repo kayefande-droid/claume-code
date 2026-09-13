@@ -53,6 +53,127 @@ _LINK_TIMEOUT = 90  # seconds per MCP tool call
 _INITIALIZ_TIMEOUT = 75  # npx cold-starts can take a while on first download
 
 
+def _npm_cache_dir() -> Path:
+    """Every claume-managed npm/MCP download lands in ~/.claume/mcp.
+
+    Keeps npx caches, installed MCP packages and their node_modules inside
+    the claume install folder instead of scattering them across the user's
+    global npm cache / project directories.
+    """
+    from . import config as _cfg
+
+    d = _cfg.mcp_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "npx-cache").mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ---------------------------------------------------------------------------
+# npm spec resolution: run MCP servers from ~/.claume/mcp/npm, not npx
+# ---------------------------------------------------------------------------
+# npx cold-starts spawn cmd.exe shims + cache resolution that can hang for
+# minutes (or forever behind some proxies). We npm-install each MCP package
+# ONCE into ~/.claume/mcp/npm and launch its bin script with `node` — the
+# same mechanism animation-motion already uses, applied automatically.
+_npm_lock = threading.Lock()
+_npm_installed: set = set()
+
+
+def _npm_root() -> Path:
+    d = _npm_cache_dir() / "npm"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _spec_package_name(npm_spec: str) -> str:
+    """'@21st-dev/magic@1.2' -> '@21st-dev/magic' · 'clerk@latest' -> 'clerk'."""
+    spec = npm_spec.strip()
+    if spec.startswith("@"):
+        return "@" + spec[1:].split("@")[0]
+    return spec.split("@")[0]
+
+
+def _find_npm_bin(npm_spec: str) -> Optional[Path]:
+    """Locate the installed package's bin/main script under ~/.claume/mcp/npm."""
+    pkg_dir = _npm_root() / "node_modules" / _spec_package_name(npm_spec)
+    pj = pkg_dir / "package.json"
+    if not pj.exists():
+        return None
+    try:
+        meta = json.loads(pj.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    rel = ""
+    bin_field = meta.get("bin")
+    if isinstance(bin_field, dict) and bin_field:
+        name = _spec_package_name(npm_spec)
+        rel = bin_field.get(name) or next(iter(bin_field.values()))
+    elif isinstance(bin_field, str):
+        rel = bin_field
+    rel = rel or str(meta.get("main") or "")
+    if not rel:
+        return None
+    script = (pkg_dir / rel).resolve()
+    return script if script.exists() else None
+
+
+def _run_npm_install(npm_spec: str, timeout: int = 300) -> bool:
+    """npm install <spec> into ~/.claume/mcp/npm. Returns True on success."""
+    npm = shutil.which("npm")
+    if not npm:
+        return False
+    cmd_list = [npm, "install", "--prefix", str(_npm_root()), npm_spec,
+                "--no-audit", "--no-fund", "--loglevel=error"]
+    if os.name == "nt" and npm.lower().endswith((".cmd", ".bat")):
+        cmd_list = ["cmd.exe", "/c"] + cmd_list
+    env = os.environ.copy()
+    env["npm_config_cache"] = str(_npm_cache_dir() / "npx-cache")
+    try:
+        proc = subprocess.run(
+            cmd_list, capture_output=True, text=True, timeout=timeout,
+            encoding="utf-8", errors="replace", env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def ensure_npm_server(name: str, spec: Dict[str, Any]) -> Tuple[str, List[str]]:
+    """Translate an npx-style MCP spec into a node invocation.
+
+    npx -y <pkg> [args…]  becomes  node <~/.claume/mcp/npm/.../bin.js> [args…]
+    installing the package on first use. Returns (command, args) — either
+    the resolved node invocation, or the original spec when resolution
+    fails (caller falls back to npx, which may still work).
+    """
+    command = str(spec.get("command", ""))
+    args = [str(a) for a in spec.get("args", [])]
+    if command not in ("npx", "npm") or not args:
+        return command, args
+    # First non-flag arg is the package spec (handles `npx -y pkg …`).
+    npm_spec = ""
+    rest: List[str] = []
+    for i, a in enumerate(args):
+        if a.startswith("-"):
+            continue
+        npm_spec = a
+        rest = args[i + 1:]
+        break
+    if not npm_spec:
+        return command, args
+    key = f"{name}:{npm_spec}"
+    with _npm_lock:
+        script = _find_npm_bin(npm_spec)
+        if script is None and key not in _npm_installed:
+            _run_npm_install(npm_spec)
+            script = _find_npm_bin(npm_spec)
+            _npm_installed.add(key)  # do not retry-install every spawn
+    if script is not None:
+        return "node", [str(script)] + rest
+    return command, args
+
+
 class MCPError(Exception):
     pass
 
@@ -63,8 +184,14 @@ class MCPServer:
     def __init__(self, name: str, spec: Dict[str, Any]) -> None:
         self.name = name
         self.spec = spec if isinstance(spec, dict) else {}
-        self.command = str(spec.get("command", ""))
-        self.args = [str(a) for a in spec.get("args", [])]
+        # npx-style specs resolve to node <script> under ~/.claume/mcp/npm
+        # (auto-installed on first use) — npx cold-starts can hang forever.
+        try:
+            resolved_cmd, resolved_args = ensure_npm_server(name, self.spec)
+        except Exception:
+            resolved_cmd, resolved_args = str(spec.get("command", "")), [str(a) for a in spec.get("args", [])]
+        self.command = resolved_cmd
+        self.args = resolved_args
         self.description = str(spec.get("description", ""))
         self.enabled = bool(spec.get("enabled", True))
         self._proc: Optional[subprocess.Popen] = None
@@ -89,6 +216,12 @@ class MCPServer:
             else:
                 cmd_list = [resolved] + self.args
         env = os.environ.copy()
+        # Keep every npm-managed MCP download inside ~/.claume/mcp so
+        # installations live in the installed claume folder.
+        npm_root = _npm_cache_dir()
+        env["npm_config_cache"] = str(npm_root / "npx-cache")
+        env["npm_config_prefix"] = str(npm_root)
+        env.setdefault("npm_config_update_notifier", "false")
         extra_env = self.spec.get("env") if isinstance(self.spec, dict) else None
         if isinstance(extra_env, dict):
             for k, v in extra_env.items():

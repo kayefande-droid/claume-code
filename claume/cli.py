@@ -280,6 +280,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     _ensure_nvidia_key_interactive()
     _start_proxy_if_needed()
 
+    # Bundled skills (ui-ux-pro-max design pack) seed + auto-activate once
+    try:
+        from . import skills as skillsmod
+
+        seeded = skillsmod.seed_bundled_skills()
+        if seeded and not quiet:
+            print(f"{_ui.GREY}  skills: {', '.join(seeded)} — design guidance active (/skills){RESET}")
+    except Exception:
+        pass
+
     _print_context_line(workspace)
 
     agent = Agent(workspace=workspace, ui=ui, confirm_fn=ui.confirm)
@@ -396,7 +406,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if agent.is_busy() and low in ("/new",):
                     print(f"{_ui.GOLD}⚠ a task is running — /skip first, then /new{RESET}")
                     continue
-                commands.handle_command(line, agent)
+
+                def _enqueue(text: str = "") -> None:
+                    task_queue.put(text)
+                    _echo_typed(f"queued: {text}")
+
+                commands.handle_command(line, agent, enqueue=_enqueue)
             except SystemExit:
                 print(f"{_ui.GREY}bye ✦{RESET}")
                 task_queue.put(None)

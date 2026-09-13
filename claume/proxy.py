@@ -187,6 +187,151 @@ def _list_models(api_key: str) -> List[Dict[str, Any]]:
         return [{"id": m, "object": "model"} for m in DEFAULT_MODEL_POOL]
 
 
+# ---------------------------------------------------------------------------
+# Key + model health probing (admin UI support)
+# ---------------------------------------------------------------------------
+_probe_cache: Dict[str, Any] = {"at": 0.0, "data": {}}
+
+
+def probe_chat_model(api_key: str, model: str, timeout: float = 30.0) -> Tuple[bool, str]:
+    """Live-probe one model with a 1-token completion.
+
+    Returns (ok, detail). ok=True means the model actually serves chat
+    completions with this key — 429 counts as "exists but busy".
+    """
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with the single word: pong"}],
+        "max_tokens": 8,
+        "temperature": 0,
+        "stream": False,
+    }
+    try:
+        status, resp = _post_chat(payload, api_key, timeout=timeout)
+        if status == 200:
+            try:
+                data = json.loads(resp.read().decode("utf-8", "replace"))
+                text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                return True, (text or "pong").strip()[:40]
+            except Exception:
+                return True, "ok"
+        return False, f"HTTP {status}"
+    except UpstreamError as exc:
+        if exc.status == 429:
+            return True, "exists (rate-limited right now)"
+        return False, f"HTTP {exc.status}: {str(exc.args[0])[:120]}"
+    except Exception as exc:
+        return False, str(exc)[:160]
+
+
+def _admin_probe_pool(force: bool = False) -> Dict[str, Any]:
+    """Verify every key in the pool (cached for 60s).
+
+    Returns {"keys": [{masked, ok, status, models}...], "checked_at": iso,
+             "model": {"id":…, "ok":…, "detail":…}} — the admin UI renders
+    a health row per key so a dead key never hides behind a masked value.
+    """
+    import datetime as _dt
+
+    now = time.time()
+    if not force and _probe_cache["at"] and now - _probe_cache["at"] < 60:
+        return _probe_cache["data"]
+
+    keys = ProxyHandler.state["keys"]
+    key_rows: List[Dict[str, Any]] = []
+    for i, key in enumerate(keys[:8]):
+        masked = (key[:9] + "…" + key[-4:]) if len(key) > 16 else "•••"
+        live: List[str] = []
+        status = 0
+        try:
+            status, resp = _post_chat(
+                {
+                    "model": DEFAULT_MODEL_POOL[0],
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 4,
+                    "temperature": 0,
+                    "stream": False,
+                },
+                key,
+                timeout=25,
+            )
+            resp.read()
+            ok = status == 200
+        except UpstreamError as exc:
+            ok = False
+            status = exc.status
+            if status == 429:
+                ok = True  # valid key, just busy
+        except Exception:
+            ok = False
+        if ok:
+            try:
+                live = [m.get("id", "") for m in _list_models(key)][:200]
+            except Exception:
+                live = []
+        key_rows.append(
+            {
+                "index": i,
+                "masked": masked,
+                "ok": ok,
+                "status": status,
+                "models": len(live),
+            }
+        )
+
+    # Live-check the primary model so "Verify" tells the truth about the
+    # model, not just the key.
+    cfg = config.Config()
+    primary = str(cfg.model)
+    model_ok, model_detail = probe_chat_model(keys[0], primary) if keys else (False, "no key")
+
+    data = {
+        "keys": key_rows,
+        "checked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        "model": {"id": primary, "ok": model_ok, "detail": model_detail},
+    }
+    _probe_cache["at"] = now
+    _probe_cache["data"] = data
+    return data
+
+
+def _filter_chat_models(models: List[Dict[str, Any]], api_key: str, sample: int = 60) -> List[Dict[str, Any]]:
+    """Keep models that actually answer chat completions.
+
+    The /v1/models catalog lists embedding/reranker/vision models that can
+    never serve /chat/completions — probing a capped sample in one sweep
+    keeps /v1/models honest without hammering NVIDIA.
+    """
+    # Fast pre-filter: obvious non-chat ids.
+    keep: List[Dict[str, Any]] = []
+    ambiguous: List[Dict[str, Any]] = []
+    for m in models:
+        mid = str(m.get("id", ""))
+        if not mid or mid in config.DEAD_MODELS:
+            continue
+        low = mid.lower()
+        if any(tag in low for tag in ("embed", "rerank", "-whisper", "tts", "guard", "nemoretriever", "clip", "ocrvda", "sdxl", "stable-diffusion", "flux", "diffusion")):
+            continue
+        keep.append(m)
+    if len(keep) <= sample:
+        return keep
+    # Probe a rotating sample (cache position advances each call).
+    import random
+
+    sample_models = random.sample(keep, sample)
+    verified_ids = {
+        mid
+        for mid, ok, _ in (
+            (str(m.get("id", "")), *probe_chat_model(api_key, str(m.get("id", "")), timeout=12))
+            for m in sample_models
+        )
+        if ok
+    }
+    # Always keep the default pool + anything verified live.
+    out = [m for m in keep if str(m.get("id", "")) in verified_ids or str(m.get("id", "")) in DEFAULT_MODEL_POOL]
+    return out or keep[:40]
+
+
 def _sse_iter(resp: Any) -> Iterable[bytes]:
     while True:
         chunk = resp.readline()
@@ -261,6 +406,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "requests": ProxyHandler.state["requests"],
                     "errors": ProxyHandler.state["errors"],
                     "models": ProxyHandler.state["model_pool"][:3],
+                    "version": _claume_version(),
                 },
             )
             return
@@ -273,6 +419,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if self.path == "/admin/data":
             self._handle_admin_data()
             return
+        if self.path == "/admin/keys":
+            self._handle_admin_keys_list()
+            return
+        if self.path == "/admin/refresh":
+            self._handle_admin_refresh()
+            return
+        if self.path == "/admin/check-update":
+            self._handle_admin_check_update()
+            return
         self._json(404, {"error": {"message": f"unknown path {self.path}"}})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -284,6 +439,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/admin/verify":
             self._handle_admin_verify()
+            return
+        if self.path == "/admin/key-add":
+            self._handle_admin_key_add()
+            return
+        if self.path == "/admin/key-del":
+            self._handle_admin_key_del()
             return
         self._json(404, {"error": {"message": f"unknown path {self.path}"}})
 
@@ -320,6 +481,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     models = live
             except Exception:
                 pass
+        health = _admin_probe_pool()
         self._json(
             200,
             {
@@ -330,10 +492,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "model": cfg.model,
                 "fallbacks": cfg.get("model_fallbacks", []) or [],
                 "models": (models[:80] or list(DEFAULT_MODEL_POOL)),
+                "health": health,
                 "stats": {
                     "requests": ProxyHandler.state["requests"],
                     "errors": ProxyHandler.state["errors"],
                     "keys": len(keys),
+                    "last_error": ProxyHandler.state.get("last_error", ""),
                 },
                 "base_url": (
                     f"http://{cfg.get('proxy_host', '127.0.0.1')}:"
@@ -377,6 +541,56 @@ class ProxyHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def _handle_admin_key_add(self) -> None:
+        """Vault an additional rotation key (NVIDIA_API_KEY_2, _3, …)."""
+        body = self._read_json_body()
+        key = str(body.get("api_key") or "").strip()
+        if not key.startswith("nvapi-"):
+            self._json(400, {"ok": False, "error": "key must start with nvapi-"})
+            return
+        existing = collect_keys()
+        # Store under the next free slot name in the vault.
+        cfg = config.Config()
+        vault_names = set(cfg.get("key_vault", {}) or {})
+        i = 2
+        while f"NVIDIA_API_KEY_{i}" in vault_names:
+            i += 1
+        name = f"NVIDIA_API_KEY_{i}"
+        keyvault.set_key(name, key)
+        cfg.set(f"key_vault.{name}", True)
+        self._refresh_keys()
+        total = len(collect_keys())
+        self._json(
+            200,
+            {"ok": True, "stored_as": name, "keys": total, "replaced": key in existing},
+        )
+
+    def _handle_admin_keys_list(self) -> None:
+        """Masked list of every key in the rotation pool."""
+        vault = config.Config().get("key_vault", {}) or {}
+        rows = []
+        for name in sorted(vault.keys()):
+            val = keyvault.get_key(name)
+            if not val:
+                continue
+            masked = (val[:9] + "…" + val[-4:]) if len(val) > 16 else "•••"
+            rows.append({"name": name, "masked": masked})
+        self._json(200, {"keys": rows})
+
+    def _handle_admin_key_del(self) -> None:
+        body = self._read_json_body()
+        name = str(body.get("name") or "").strip().upper()
+        if not name:
+            self._json(400, {"ok": False, "error": "missing key name"})
+            return
+        ok = keyvault.delete_key(name)
+        cfg = config.Config()
+        m = cfg.get("key_vault", {}) or {}
+        m.pop(name, None)
+        cfg.set("key_vault", m)
+        self._refresh_keys()
+        self._json(200, {"ok": ok, "removed": name, "keys": len(collect_keys())})
+
     def _handle_admin_verify(self) -> None:
         keys = ProxyHandler.state["keys"]
         if not keys:
@@ -384,23 +598,53 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
         body = self._read_json_body()
         model = str(body.get("model") or config.Config().model)
-        probe = {
-            "model": model,
-            "messages": [{"role": "user", "content": "Reply with the single word: pong"}],
-            "max_tokens": 8,
-            "temperature": 0,
-            "stream": False,
-        }
+        # Verify against the WHOLE key pool: a rotation setup is only
+        # healthy if every key actually serves the chosen model.
+        results = []
+        all_ok = True
+        for key in keys[:8]:
+            ok, detail = probe_chat_model(key, model, timeout=45)
+            masked = (key[:9] + "…" + key[-4:]) if len(key) > 16 else "•••"
+            results.append({"masked": masked, "ok": ok, "detail": detail})
+            all_ok = all_ok and ok
+        self._json(
+            200,
+            {
+                "ok": all_ok,
+                "model": model,
+                "keys": results,
+                "reply": results[0].get("detail", "") if results else "",
+            },
+        )
+
+    def _handle_admin_refresh(self) -> None:
+        """Force-refresh the health probe cache (bypass the 60s TTL)."""
+        self._refresh_keys()
+        _probe_cache["at"] = 0.0
+        self._json(200, {"ok": True, "health": _admin_probe_pool(force=True)})
+
+    def _handle_admin_check_update(self) -> None:
+        """Compare the running version against GitHub's pyproject.toml."""
+        latest = ""
         try:
-            _status, resp = _post_chat(probe, keys[0], timeout=45)
-            data = json.loads(resp.read().decode("utf-8", "replace"))
-            text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
-            self._json(200, {"ok": True, "model": model, "reply": (text or "").strip()[:80]})
-        except UpstreamError as exc:
-            self._json(
-                200,
-                {"ok": False, "model": model, "status": exc.status, "error": exc.args[0][:300]},
-            )
+            req = urllib.request.Request(config.RAW_PYPROJECT_URL)
+            with urllib.request.urlopen(req, timeout=12, context=_SSL_CTX) as resp:
+                for line in resp.read().decode("utf-8", "replace").splitlines():
+                    if line.strip().startswith("version"):
+                        latest = line.split("=", 1)[1].strip().strip("\"'")
+                        break
+        except Exception:
+            pass
+        current = _claume_version()
+        self._json(
+            200,
+            {
+                "current": current,
+                "latest": latest or "unknown",
+                "update_available": bool(latest and latest != current),
+                "install": config.REPO_WEB,
+            },
+        )
 
     def _handle_models(self) -> None:
         self._refresh_keys()
@@ -409,6 +653,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self._json(401, {"error": {"message": "no API key configured"}})
             return
         models = _list_models(keys[0])
+        # Serve chat-capable models only — embeddings/rerankers pollute the
+        # admin dropdown and produce confusing 400s when picked.
+        models = _filter_chat_models(models, keys[0])
         ProxyHandler.state["model_pool"] = [m.get("id", "") for m in models] or list(
             DEFAULT_MODEL_POOL
         )

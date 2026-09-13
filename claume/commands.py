@@ -53,6 +53,7 @@ HELP_LINES = [
     f"  {MINT}/continue{RESET}         resume the most recent session",
     f"  {MINT}/agents{RESET} <t1>; <t2>  run parallel subagents and merge reports",
     f"  {MINT}/design{RESET} <prompt>  run the MCP design pipeline (Link System)",
+    f"  {MINT}/webdesign{RESET} <prompt>  build a website/UI now — studio brief + real fonts/assets",
     f"  {MINT}/mcp-preset{RESET} <name>  install a server preset (design)",
     f"  {MINT}/keys{RESET}             list vaulted API keys (masked)",
     f"  {MINT}/key{RESET} <NAME>       set a key (e.g. /key GROQ_API_KEY)",
@@ -557,6 +558,9 @@ def cmd_mcp_add(args: List[str]) -> None:
     name, command = args[0], " ".join(args[1:])
     cfg = config.Config()
     servers = cfg.get("mcp_servers", {})
+    from .mcp import _npm_cache_dir
+
+    print(f"{GREY}  npm downloads for MCP servers install under {MINT}{_npm_cache_dir()}{RESET}")
     servers[name] = {"command": command, "enabled": True}
     cfg.set("mcp_servers", servers)
     print(f"{GREEN}✔ registered MCP server '{name}'{RESET}")
@@ -1014,6 +1018,8 @@ def cmd_sessions(args: List[str], agent: "Agent") -> None:
             cur = " ← current" if s["id"] == agent.session_id else ""
             label = s["name"] or s["title"]
             print(f"    {MINT}{s['id']}{RESET} {GREY}{s['when']} · {s['turns']} turns{RESET} {label}{GREY}{cur}{RESET}")
+            if s.get("activity"):
+                print(f"      {GREY}↳ did:{RESET} {SILVER}{s['activity']}{RESET}")
 
 
 def cmd_rename(args: List[str], agent: "Agent") -> None:
@@ -1149,6 +1155,32 @@ def cmd_design(args: List[str], agent: "Agent") -> None:
         print(f"{GREY}  pipeline output loaded — type build it to start implementation{RESET}")
 
 
+def cmd_webdesign(args: List[str], agent: "Agent", enqueue=None) -> None:
+    """Studio build: pipeline + brief injected, then the build auto-queues."""
+    from . import mcp, webstudio
+
+    request = " ".join(args)
+    if not request:
+        print(f"{RED}usage: /webdesign <what to build>  e.g. /webdesign photographer portfolio{RESET}")
+        return
+    agent.ui.render_info("claude studio: assembling design brief + Link System pipeline…")
+    brief, _ = webstudio.studio_brief(request)
+    report, _is_err = mcp.design_pipeline(request, agent.workspace)
+    payload = (
+        f"DESIGN TASK: '{request}'\n\n{brief}\n\n{report[:8000]}\n\n"
+        "Build the website/UI now in the workspace. Pull the real fonts with "
+        "webstudio_pull_font and real image assets with webstudio_pull_asset, "
+        "reference them locally, follow the studio brief exactly, and verify the "
+        "result (open/inspect the files). No placeholder divs, no lorem ipsum."
+    )
+    agent.history.append({"role": "user", "content": payload})
+    print(f"{GREEN}✔ studio brief + pipeline output loaded{RESET} {GREY}({request[:60]}){RESET}")
+    if enqueue is not None:
+        enqueue("build it now — follow the injected design brief exactly")
+    else:
+        print(f"{GREY}  type {MINT}build it{RESET} {GREY}to start implementation{RESET}")
+
+
 def cmd_mcp_preset(args: List[str]) -> None:
     from . import mcp
 
@@ -1178,8 +1210,11 @@ def cmd_mcp_preset(args: List[str]) -> None:
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
-def handle_command(line: str, agent: "Agent") -> bool:
-    """Handle a /command. Returns True if it was a claume command."""
+def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
+    """Handle a /command. Returns True if it was a claume command.
+
+    enqueue (optional) lets commands like /webdesign auto-queue the build
+    turn through the REPL's live task queue."""
     if not line.startswith("/"):
         return False
     parts = line[1:].split()
@@ -1242,6 +1277,8 @@ def handle_command(line: str, agent: "Agent") -> bool:
         cmd_agents(args, agent)
     elif name == "design":
         cmd_design(args, agent)
+    elif name == "webdesign":
+        cmd_webdesign(args, agent, enqueue=enqueue)
     elif name == "mcp-preset":
         cmd_mcp_preset(args)
     elif name == "keys":

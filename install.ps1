@@ -92,6 +92,11 @@ foreach ($f in @("pyproject.toml", "README.md", "LICENSE")) {
         Copy-Item (Join-Path $SrcRoot $f) $AppDir -Force
     }
 }
+# Ship bundled skills (ui-ux-pro-max design pack) so they seed on first run
+if (Test-Path (Join-Path $SrcRoot "skills")) {
+    Copy-Item (Join-Path $SrcRoot "skills") $AppDir -Recurse -Force
+    Write-Host "[OK] bundled skills staged (ui-ux-pro-max)" -ForegroundColor Green
+}
 Write-Host "[OK] copied agent core" -ForegroundColor Green
 
 # ---------------------------------------------------------------- venv + deps
