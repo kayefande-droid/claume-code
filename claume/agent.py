@@ -172,8 +172,28 @@ class Agent:
     # ------------------------------------------------------------------
     # One full user turn (multi-step ReAct with auto-continue)
     # ------------------------------------------------------------------
-    def run_turn(self, user_text: str) -> str:
-        self.history.append({"role": "user", "content": user_text})
+    def run_turn(self, user_text: str, attachments: Optional[List[dict]] = None) -> str:
+        """One full user turn.
+
+        ``attachments`` is an optional list of
+        ``{"name", "data_url", "bytes"}`` image dicts (from
+        ``/image <path>``); when present the user message becomes an
+        OpenAI-style multimodal content array so vision-capable models
+        can see the images.
+        """
+        if attachments:
+            content: list = [{"type": "text", "text": user_text}]
+            for att in attachments:
+                content.append(
+                    {"type": "image_url", "image_url": {"url": att.get("data_url", "")}}
+                )
+            self.history.append({"role": "user", "content": content})
+            names = ", ".join(a.get("name", "image") for a in attachments)
+            self.history.append(
+                {"role": "user", "content": f"(the user attached image(s): {names} — inspect them and factor them into this task)"}
+            )
+        else:
+            self.history.append({"role": "user", "content": user_text})
         self._current_task_text = user_text
         self._busy = True
         try:

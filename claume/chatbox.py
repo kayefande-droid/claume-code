@@ -31,7 +31,13 @@ _VT_STATE = {"enabled": False, "old_mode": None}
 
 
 def enable_vt() -> bool:
-    """Enable ANSI VT input on the Windows console (once). Idempotent."""
+    """Prepare the console for the chat box (Windows). Idempotent.
+
+    IMPORTANT: input console modes are left UNTOUCHED — mutating them
+    broke typing entirely (Python's stdin buffering never delivered the
+    events). We only enable VT *output* processing for legacy conhost;
+    keys are read per-event via msvcrt (see read_key_vt).
+    """
     if os.name != "nt":
         return False
     if _VT_STATE["enabled"]:
@@ -40,72 +46,171 @@ def enable_vt() -> bool:
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
-        handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
-        mode = ctypes.c_uint32()
-        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-            return False
-        _VT_STATE["old_mode"] = mode.value
-        # ENABLE_VIRTUAL_TERMINAL_INPUT, disable line + echo input
-        new_mode = (mode.value | 0x0200) & ~0x0001 & ~0x0002
-        if not kernel32.SetConsoleMode(handle, new_mode):
-            return False
-        _VT_STATE["enabled"] = True
-        # Output side: allow ANSI rendering on legacy conhost.
-        out = kernel32.GetStdHandle(-11)
+        out = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
         omode = ctypes.c_uint32()
         if kernel32.GetConsoleMode(out, ctypes.byref(omode)):
-            kernel32.SetConsoleMode(out, omode.value | 0x0004)
+            kernel32.SetConsoleMode(out, omode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        _VT_STATE["enabled"] = True
         return True
     except Exception:
         return False
 
 
 def restore_console() -> None:
+    """Restore console state (bracketed paste off; nothing else changed)."""
     if os.name != "nt" or not _VT_STATE["enabled"]:
         return
     try:
-        import ctypes
-
-        kernel32 = ctypes.windll.kernel32
-        if _VT_STATE["old_mode"] is not None:
-            kernel32.SetConsoleMode(kernel32.GetStdHandle(-10), _VT_STATE["old_mode"])
+        sys.stdout.write("\033[?2004l")  # bracketed paste off
+        sys.stdout.flush()
     except Exception:
         pass
     _VT_STATE["enabled"] = False
 
 
+# Special tokens returned by the key readers.
+PASTE_START = "__PASTE_START__"
+PASTE_END = "__PASTE_END__"
+
+# ---------------------------------------------------------------------------
+# Open-box registry — lets worker-thread output reflow the open box
+# ---------------------------------------------------------------------------
+# The REPL keeps the box rendered while a task runs in the background.
+# When the worker prints, it calls close_box() so output lands on clean
+# lines ABOVE where the box was; the next keystroke redraws the box below
+# the new output. Pure-stdout, no cursor juggling — safe from any thread.
+_OPEN_BOX: Optional["Renderer"] = None
+
+
+def box_open() -> bool:
+    return _OPEN_BOX is not None
+
+
+def close_box() -> None:
+    """Wipe the on-screen box frame (call before printing output)."""
+    global _OPEN_BOX
+    r = _OPEN_BOX
+    if r is not None:
+        try:
+            r.clear()
+        except Exception:
+            pass
+        _OPEN_BOX = None
+
+
+def reopen_box() -> None:
+    """Redraw the box after output pushed the scroll position (best effort)."""
+    r = _OPEN_BOX
+    if r is not None and r.ed is not None:
+        try:
+            r.render(r.ed, r.ed.ghost())
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Image attachments — /image <path> pins a file onto the next task
+# ---------------------------------------------------------------------------
+_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+}
+
+
+def attach_image(path: str) -> Optional[Dict[str, str]]:
+    """Read an image file and return {name, data_url, bytes} for an
+    OpenAI-style vision payload, or None if unreadable/unsupported."""
+    import base64
+
+    try:
+        p = Path(path).expanduser()
+        if not p.is_file():
+            return None
+        mime = _MIME.get(p.suffix.lower())
+        if not mime:
+            return None
+        raw = p.read_bytes()
+        if len(raw) > 12 * 1024 * 1024:
+            return None  # keep requests sane (>12 MB)
+        b64 = base64.b64encode(raw).decode("ascii")
+        return {
+            "name": p.name,
+            "data_url": f"data:{mime};base64,{b64}",
+            "bytes": str(len(raw) // 1024) + " KB",
+        }
+    except Exception:
+        return None
+
+_LEGACY_SPECIAL = {
+    "H": "UP", "P": "DOWN", "K": "LEFT", "M": "RIGHT",
+    "G": "HOME", "O": "END", "S": "DELETE", "R": "INSERT",
+}
+
+
+def _map_vt_sequence(seq: str) -> str:
+    """Map a CSI sequence body (after ESC[') to a token."""
+    if seq.startswith("200~"):
+        return PASTE_START
+    if seq.startswith("201~"):
+        return PASTE_END
+    return {
+        "A": "UP", "B": "DOWN", "C": "RIGHT", "D": "LEFT",
+        "H": "HOME", "F": "END", "Z": "SHIFT+TAB",
+        "1~": "HOME", "7~": "HOME", "4~": "END", "8~": "END",
+        "3~": "DELETE",
+    }.get(seq, "ESC")
+
+
+def _map_legacy(code: str) -> str:
+    """Map the char after a \x00/\xe0 prefix (legacy console codes)."""
+    if code == "\r":
+        return "ALT+ENTER"
+    return _LEGACY_SPECIAL.get(code.upper(), "ESC")
+
+
 def read_key_vt() -> str:
-    """Read one key with VT input enabled (Windows). Canonical tokens."""
+    """Read one key on Windows via msvcrt — per-event, never blocks on
+    line buffering. Handles legacy (\xe0-prefixed) AND VT (ESC[…) arrow
+    keys, Alt+Enter, and bracketed-paste markers."""
     import msvcrt
 
-    ch = sys.stdin.buffer.read(1)
-    if not ch:
-        return ""
-    c = ch.decode("utf-8", "replace")
-    if c == "\x1b":
-        nxt = sys.stdin.buffer.read(1).decode("utf-8", "replace") if msvcrt.kbhit() else ""
-        if nxt == "[":
-            third = sys.stdin.buffer.read(1).decode("utf-8", "replace")
-            return {
-                "A": "UP", "B": "DOWN", "C": "RIGHT", "D": "LEFT",
-                "H": "HOME", "F": "END", "Z": "SHIFT+TAB",
-            }.get(third, "ESC")
-        if nxt in ("\r", "\n"):
-            return "ALT+ENTER"
+    ch = msvcrt.getwch()
+    if ch in ("\x00", "\xe0"):  # legacy special-key prefix
+        return _map_legacy(msvcrt.getwch())
+    if ch == "\x1b":  # ESC: VT sequence, Alt+Enter, or bare Esc
+        if msvcrt.kbhit():
+            nxt = msvcrt.getwch()
+            if nxt == "[":
+                seq = ""
+                deadline = 24  # hard cap on sequence length
+                while deadline:
+                    deadline -= 1
+                    if not msvcrt.kbhit():
+                        break
+                    c = msvcrt.getwch()
+                    seq += c
+                    if c.isalpha() or c == "~":
+                        break
+                return _map_vt_sequence(seq) if seq else "ESC"
+            if nxt in ("\r", "\n"):
+                return "ALT+ENTER"
+            if nxt in ("\x00", "\xe0"):
+                return _map_legacy(msvcrt.getwch())
+            return "ESC"
         return "ESC"
-    if c in ("\r", "\n"):
+    if ch in ("\r", "\n"):
         return "ENTER"
-    if c in ("\x7f", "\b"):
+    if ch in ("\x7f", "\b", "\x08"):
         return "BACKSPACE"
-    if c == "\t":
+    if ch == "\t":
         return "TAB"
-    if c == "\x03":
-        return "CTRL+C"
-    if c == "\x04":
+    if ch == "\x04":
         return "CTRL+D"
-    if c == "\x15":
+    if ch == "\x15":
         return "CTRL+U"
-    return c
+    # \x03 (Ctrl+C) is delivered as a signal by Windows; Python raises
+    # KeyboardInterrupt inside getwch — handled by the caller.
+    return ch
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +335,8 @@ class Editor:
         self.drop: List[str] = []
         self.drop_sel = 0
         self.drop_kind = ""  # "cmd" | "file" | ""
+        self._pasting = False
+        self.paste_hints = 0  # newlines seen while pasting
 
     # -- state helpers -----------------------------------------------------
     @property
@@ -290,8 +397,19 @@ class Editor:
                 pick = self.drop[self.drop_sel]
                 self._accept_drop(pick)
                 return None
+            # Paste-safe submit: an Enter inside a pasted multi-line blob
+            # inserts a newline UNLESS the cursor sits at the blob's end
+            # (then it submits). Prevents giant pastes self-submitting on
+            # their internal line breaks while keeping one-press submit.
+            if self._pasting:
+                self.paste_hints += 1
+                cur = self.lines[self.row]
+                at_end = self.col >= len(cur)
+                last_row = self.row >= len(self.lines) - 1
+                if not (at_end and last_row):
+                    return self.key("ALT+ENTER")
             submitted = self.text
-            append_history(submitted.replace("\n", " "))
+            append_history(submitted.replace("\n", " ")[:200])
             self.history = load_history()
             self.hidx = len(self.history)
             self.reset()
@@ -375,9 +493,33 @@ class Editor:
         if k == "CTRL+U":
             self.reset()
             return None
+        if k == PASTE_START:
+            self._pasting = True
+            return None
+        if k == PASTE_END:
+            self._pasting = False
+            return None
         if k.startswith("ESC") or k == "SHIFT+TAB":
             return k  # let the caller decide (mode cycling etc.)
-        # printable characters (a key may be a multi-char paste burst)
+        # printable characters / paste bursts
+        if "\n" in k or "\r" in k:
+            # multi-line paste chunk: split at newlines into editor rows
+            chunk = k.replace("\r\n", "\n").replace("\r", "\n")
+            parts = chunk.split("\n")
+            cur = self.lines[self.row]
+            tail = cur[self.col:]
+            del cur[self.col:]
+            for i, part in enumerate(parts):
+                for ch in part:
+                    if ch >= " ":
+                        cur.append(ch)
+                if i < len(parts) - 1:
+                    self.lines.insert(self.row + 1, tail if i == len(parts) - 2 else [])
+                    self.row += 1
+                    cur = self.lines[self.row]
+                    self.col = 0
+            self.col = len(self.lines[self.row])
+            return None
         cur = self.lines[self.row]
         for ch in k:
             if ch >= " ":
@@ -419,6 +561,8 @@ class Renderer:
         self.width = max(40, min(width, (os.get_terminal_size().columns - 1) if _cols() else 100))
         self.placeholder = placeholder
         self.rows_drawn = 0  # total lines currently on screen for this frame
+        self.ed: Optional[Editor] = None  # set by read_line (for reopen_box)
+        self.busy = False  # True while a task runs in the background
 
     def render(self, ed: Editor, ghost: str = "") -> None:
         out = []
@@ -432,6 +576,9 @@ class Renderer:
         ghost_txt = ""
         if ed.col >= len(line) and ghost:
             ghost_txt = "\033[38;5;240m" + ghost[: max(0, self.width - len(before) - 2)] + RESET
+        elif not line and self.busy:
+            # busy hint outranks the idle placeholder
+            ghost_txt = "\033[38;5;240mtask running — type to queue · / for commands · /skip stops it" + RESET
         elif not line and self.placeholder:
             # dimmed placeholder while the buffer is empty
             ghost_txt = "\033[38;5;240m" + self.placeholder[: max(0, self.width - len(before) - 2)] + RESET
@@ -460,12 +607,20 @@ class Renderer:
         sys.stdout.write(f"{self.prompt}{final_text.replace(chr(10), DIM + '⏎' + RESET)}\n")
         sys.stdout.flush()
         self.rows_drawn = 0
+        self._deregister()
 
     def clear(self) -> None:
         if self.rows_drawn:
             sys.stdout.write(f"\033[{self.rows_drawn - 1}A\r{CLEAR_DOWN}")
             sys.stdout.flush()
         self.rows_drawn = 0
+        self._deregister()
+
+    def _deregister(self) -> None:
+        """Any clear path un-registers this box (stale-open guard)."""
+        global _OPEN_BOX
+        if _OPEN_BOX is self:
+            _OPEN_BOX = None
 
 
 def _cols() -> bool:
@@ -485,6 +640,7 @@ def read_line(
     history: Optional[List[str]] = None,
     on_shift_tab: Optional[Callable[[], None]] = None,
     placeholder: str = "",
+    busy: bool = False,
 ) -> str:
     """Read one logical line with the full chat box experience.
 
@@ -509,14 +665,38 @@ def read_line(
 
     ed = Editor(completions=completions, history=history if history is not None else load_history())
     rend = Renderer(prompt, placeholder=placeholder)
+    rend.ed = ed
+    global _OPEN_BOX, last_attachments
+    _OPEN_BOX = rend
+    last_attachments = []
+    paste_bytes = 0
+    rend.busy = busy
+    if busy:
+        rend.width = max(40, min(rend.width, 88))
     try:
+        # enable bracketed paste so terminal paste arrives as one chunk
+        try:
+            sys.stdout.write("\033[?2004h")
+            sys.stdout.flush()
+        except Exception:
+            pass
         while True:
             rend.render(ed, ed.ghost())
-            if os.name == "nt":
-                k = read_key_vt()
-            else:
-                k = _read_key_posix()
+            try:
+                if os.name == "nt":
+                    k = read_key_vt()
+                else:
+                    k = _read_key_posix()
+            except KeyboardInterrupt:
+                # Ctrl+C surfaces as an exception inside getwch on Windows
+                k = "CTRL+C"
             result = ed.key(k)
+            if k == PASTE_START:
+                paste_bytes = 0
+                continue
+            if k == PASTE_END:
+                paste_bytes = 0
+                continue
             if result == "INT":
                 rend.clear()
                 print()
@@ -531,10 +711,18 @@ def read_line(
                 continue
             if result is not None:
                 rend.finish(ed, result)
+                if _OPEN_BOX is rend:
+                    _OPEN_BOX = None
                 return result
     finally:
         restore_console()
         rend.clear()
+        if _OPEN_BOX is rend:
+            _OPEN_BOX = None
+
+
+# Attachments collected for the NEXT submitted task (/image <path>).
+last_attachments: List[Dict[str, str]] = []
 
 
 def _read_key_posix() -> str:
@@ -549,8 +737,13 @@ def _read_key_posix() -> str:
         if c == "\x1b":
             c2 = sys.stdin.read(1)
             if c2 == "[":
-                c3 = sys.stdin.read(1)
-                return {"A": "UP", "B": "DOWN", "C": "RIGHT", "D": "LEFT", "H": "HOME", "F": "END", "Z": "SHIFT+TAB"}.get(c3, "ESC")
+                seq = ""
+                while True:
+                    c3 = sys.stdin.read(1)
+                    seq += c3
+                    if c3.isalpha() or c3 == "~" or not c3:
+                        break
+                return _map_vt_sequence(seq)
             if c2 in ("\r", "\n"):
                 return "ALT+ENTER"
             return "ESC"
@@ -564,6 +757,8 @@ def _read_key_posix() -> str:
             return "CTRL+C"
         if c == "\x04":
             return "CTRL+D"
+        if c == "\x15":
+            return "CTRL+U"
         return c
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)

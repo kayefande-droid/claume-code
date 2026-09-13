@@ -310,5 +310,86 @@ class TestHistoryPersist(unittest.TestCase):
                 chatbox._history_path = old
 
 
+class TestBoxLifecycle(unittest.TestCase):
+    """v2.3.3: permanent bottom box — open registry, reflow, deregister."""
+
+    class _FakeOut:
+        def __init__(self):
+            self.data = []
+
+        def write(self, s):
+            self.data.append(s)
+
+        def flush(self):
+            pass
+
+    def test_clear_and_finish_deregister_open_box(self):
+        from claume import chatbox as cb
+
+        old_out = sys.stdout
+        try:
+            sys.stdout = self._FakeOut()
+            ed = chatbox.Editor()
+            rend = chatbox.Renderer("│ ❯ ", width=60)
+            rend.ed = ed
+            chatbox._OPEN_BOX = rend
+            rend.render(ed, "")
+            rend.clear()
+            self.assertIsNone(chatbox._OPEN_BOX)
+
+            chatbox._OPEN_BOX = rend
+            rend.rows_drawn = 2
+            rend.finish(ed, "done")
+            self.assertIsNone(chatbox._OPEN_BOX)
+        finally:
+            sys.stdout = old_out
+
+    def test_close_box_safe_when_nothing_open(self):
+        from claume import chatbox as cb
+
+        old = chatbox._OPEN_BOX
+        try:
+            chatbox._OPEN_BOX = None
+            cb.close_box()  # must not raise
+            self.assertFalse(cb.box_open())
+        finally:
+            chatbox._OPEN_BOX = old
+
+    def test_busy_hint_outranks_placeholder(self):
+        old_out = sys.stdout
+        try:
+            out = self._FakeOut()
+            sys.stdout = out
+            ed = chatbox.Editor()
+            rend = chatbox.Renderer("│ ❯ ", width=70, placeholder="Enter a coding task or / for commands")
+            rend.ed = ed
+            rend.busy = True
+            rend.render(ed, "")
+            text = "".join(out.data)
+            self.assertIn("task running", text)
+            self.assertNotIn("Enter a coding task", text)
+        finally:
+            sys.stdout = old_out
+
+    def test_attach_image_and_rejects_bad(self):
+        import tempfile
+        from claume import chatbox as cb
+
+        # tiny valid 1x1 PNG
+        png = bytes.fromhex(
+            "89504e470d0a1a0a0000000d494844520000000100000001080200000090775"
+            "3de0000000c4944415408d763f8cfc000000301010018dd8db00000000049454e44ae426082"
+        )
+        tmp = Path(tempfile.gettempdir()) / "claume_ut_img.png"
+        tmp.write_bytes(png)
+        try:
+            att = cb.attach_image(str(tmp))
+            self.assertIsNotNone(att)
+            self.assertTrue(att["data_url"].startswith("data:image/png;base64,"))
+            self.assertIsNone(cb.attach_image("Z:/nope/missing.png"))
+        finally:
+            tmp.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()

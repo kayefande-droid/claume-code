@@ -184,7 +184,7 @@ class TestTaskQueueWorker(_IsolatedConfigMixin, unittest.TestCase):
             results.append(final)
 
         q = queue.Queue()
-        worker = _make_worker(agent, ui, q)
+        worker = _make_worker(agent, ui, q, {"dirty": False})
         with patch.object(llm, "stream_chat", fake_stream):
             worker.start()
             q.put("task one")

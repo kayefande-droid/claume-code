@@ -220,11 +220,12 @@ class _Shimmer:
 # ---------------------------------------------------------------------------
 # Worker: consumes the task queue so typing stays live during a run
 # ---------------------------------------------------------------------------
-def _make_worker(agent: Agent, ui: UI, task_queue: "queue.Queue[str]") -> threading.Thread:
+def _make_worker(agent: Agent, ui: UI, task_queue: "queue.Queue", box_state: dict) -> threading.Thread:
     from . import voice  # late import: optional engines
 
     def _finish_turn(final: str) -> None:
         uimod = _ui
+        _chatbox.close_box()
         if final and final not in ("(no final answer produced)", "(interrupted by user)"):
             print(f"\n{uimod.ACCENT}❯{RESET} {BOLD}{final}{RESET}\n")
             ui.last_final = final
@@ -238,22 +239,37 @@ def _make_worker(agent: Agent, ui: UI, task_queue: "queue.Queue[str]") -> thread
         elif final == "(interrupted by user)":
             print(f"\n{uimod.GOLD}⚠ task stopped — queue still live, type the next thing{RESET}\n")
 
+    def _print_outside_box(*args, **kwargs) -> None:
+        """Worker-side print: wipe the on-screen box first so output lands
+        on clean lines, then mark the box dirty (next keystroke redraws
+        it below this output)."""
+        _chatbox.close_box()
+        print(*args, **kwargs)
+        box_state["dirty"] = True
+
     def _run() -> None:
         while True:
-            text = task_queue.get()
+            item = task_queue.get()
             try:
-                if text is None:
+                if item is None:
                     return
+                text = item
+                attachments: list = []
+                if isinstance(item, dict):
+                    text = item.get("text", "")
+                    attachments = item.get("attachments") or []
                 # Animated thinking shimmer around the run
+                # (rendered via _print_outside_box so it never overprints
+                # the open input box)
                 shimmer = _Shimmer(ui)
                 try:
                     shimmer.start()
-                    final = agent.run_turn(text)
+                    final = agent.run_turn(text, attachments=attachments or None)
                 finally:
                     thought = ""
                     try:
                         thought = next(
-                            (m["content"] for m in reversed(agent.history) if m.get("role") == "assistant"),
+                            (m["content"] for m in reversed(agent.history) if m.get("role") == "assistant" and isinstance(m.get("content"), str)),
                             "",
                         )[:70]
                     except Exception:
@@ -261,7 +277,7 @@ def _make_worker(agent: Agent, ui: UI, task_queue: "queue.Queue[str]") -> thread
                     shimmer.stop(thought)
                 _finish_turn(final)
             except Exception as exc:
-                ui.render_error(f"task failed: {exc}")
+                _print_outside_box(f"{_ui.RED}✗ task failed: {exc}{RESET}")
             finally:
                 task_queue.task_done()
 
@@ -339,9 +355,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     from . import voice  # late import: optional engines
 
-    # Task queue + worker: the REPL never blocks on a running task
-    task_queue: "queue.Queue[str]" = queue.Queue()
-    worker = _make_worker(agent, ui, task_queue)
+    # Task queue + worker: the REPL never blocks on a running task.
+    # Items are str tasks or {"text", "attachments"} dicts (image input).
+    task_queue: "queue.Queue" = queue.Queue()
+    box_state = {"dirty": False}
+    worker = _make_worker(agent, ui, task_queue, box_state)
     worker.start()
 
     use_input_box = bool(config.Config().get("input_box", True)) and not quiet
@@ -354,39 +372,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     while True:
         busy = agent.is_busy() or not task_queue.empty()
 
-        # --- prompt (Freebuff-style box when idle, live prompt when busy)
-        if busy:
-            prompt = _ui.busy_prompt()
-        elif use_input_box:
+        # --- prompt: the boxed chat box is PERMANENT — same look busy or
+        # idle; only the placeholder row changes (task running… vs Enter a
+        # coding task…). Nothing prints over it: worker output closes the
+        # box first (see _print_outside_box) and the next keystroke
+        # redraws it under the fresh output.
+        session_label = ""
+        try:
+            if agent.session_id:
+                data = sessions.load_session(agent.session_id)
+                if data:
+                    session_label = data.get("project") or ""
+        except Exception:
             session_label = ""
-            try:
-                if agent.session_id:
-                    data = sessions.load_session(agent.session_id)
-                    if data:
-                        session_label = data.get("project") or ""
-            except Exception:
-                session_label = ""
-            # top border now carries the live session timer on the right
-            print(_frame.input_box_top_labeled(
-                config.Config().mode, session_label, _fmt_elapsed(session_clock[0])
-            ))
-            # The chat box redraws this line itself — carry the left border
-            # inside the prompt instead of pre-writing it.
-            prompt = f"{_ui.MUTED}│{_ui.RESET} {_ui.ACCENT}{_ui.BOLD}❯{_ui.RESET} "
-        else:
-            prompt = ui.prompt_symbol()
+        prompt = f"{_ui.MUTED}│{_ui.RESET} {_ui.ACCENT}{_ui.BOLD}❯{_ui.RESET} "
+        if not use_input_box:
+            prompt = _ui.busy_prompt() if busy else ui.prompt_symbol()
 
         # --- read input through the Freebuff-style chat box (drops,
-        # ghost suggestions, history, Alt+Enter multiline); plain input()
-        # when quiet or non-interactive.
+        # ghost suggestions, history, Alt+Enter multiline, bracketed
+        # paste); plain input() when quiet or non-interactive.
         def _on_shift_tab() -> None:
             _cycle_mode(agent)
 
-        # The chat box owns the idle prompt; while a task runs (worker
-        # prints concurrently) plain input() keeps output coherent.
-        use_chatbox = (
-            not busy and not quiet and sys.stdin.isatty() and use_input_box
-        )
+        use_chatbox = not quiet and sys.stdin.isatty() and use_input_box
         try:
             if not use_chatbox:
                 line = input(prompt).strip()
@@ -394,6 +403,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 line = _chatbox.read_line(
                     prompt, on_shift_tab=_on_shift_tab,
                     placeholder=_frame.PLACEHOLDER,
+                    busy=busy,
                 ).strip()
         except EOFError:
             print(f"\n{_ui.GREY}bye ✦{RESET}")
@@ -413,16 +423,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if not use_chatbox:
                     line = input(prompt).strip()
                 else:
-                    line = _chatbox.read_line(prompt, on_shift_tab=_on_shift_tab).strip()
+                    line = _chatbox.read_line(prompt, on_shift_tab=_on_shift_tab, busy=busy).strip()
             except (EOFError, KeyboardInterrupt):
                 print(f"\n{_ui.GREY}bye ✦{RESET}")
                 task_queue.put(None)
                 worker.join(timeout=5)
                 voice.wait_until_done(timeout=3)
                 return 0
-        finally:
-            if use_input_box and not busy:
-                print(_frame.input_box_bottom_rule())
 
         if not line:
             continue
@@ -477,14 +484,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                 ui.render_error(f"command failed: {exc}")
             continue
 
-        # Plain text: if busy → queue it; else → run now via the queue too
-        # (the queue IS the runner; typing always stays live).
+        # /image without prefix handling: it is dispatched inside
+        # handle_command; plain text falls through to the queue below.
+
+        # Plain text: if busy → queue it (runs after the current task);
+        # else → run now via the queue too. Pending /image attachments
+        # ride along with whichever task consumes them.
+        payload: dict = {"text": line, "attachments": list(_chatbox.last_attachments)}
         if busy:
-            task_queue.put(line)
+            task_queue.put(payload)
             _echo_typed(f"queued: {line}")
+            if _chatbox.last_attachments:
+                names = ", ".join(a["name"] for a in _chatbox.last_attachments)
+                print(f"{_ui.GREY}  (+ image: {names}){RESET}")
             print(f"{_ui.GREY}  (position {task_queue.qsize()} in queue — /skip cancels the current task){RESET}")
         else:
-            task_queue.put(line)
+            task_queue.put(payload)
+        _chatbox.last_attachments = []
 
 
 def _cycle_mode(agent: Agent) -> None:

@@ -89,7 +89,7 @@ def api_key_for(provider: str) -> Optional[str]:
 
 
 def stream_chat(
-    messages: List[Dict[str, str]],
+    messages: List[Dict[str, Any]],  # content may be str OR multimodal list
     model: Optional[str] = None,
     provider: Optional[str] = None,
     temperature: float = 0.2,

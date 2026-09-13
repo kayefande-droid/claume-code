@@ -53,6 +53,7 @@ HELP_LINES = [
     f"  {MINT}/continue{RESET}         resume the most recent session",
     f"  {MINT}/agents{RESET} <t1>; <t2>  run parallel subagents and merge reports",
     f"  {MINT}/design{RESET} <prompt>  run the MCP design pipeline (Link System)",
+    f"  {MINT}/image{RESET} <path>    attach an image (png/jpg/webp) to your next task",
     f"  {MINT}/webdesign{RESET} <prompt>  build a website/UI now — studio brief + real fonts/assets",
     f"  {MINT}/mcp-preset{RESET} <name>  install a server preset (design)",
     f"  {MINT}/keys{RESET}             list vaulted API keys (masked)",
@@ -1155,6 +1156,30 @@ def cmd_design(args: List[str], agent: "Agent") -> None:
         print(f"{GREY}  pipeline output loaded — type build it to start implementation{RESET}")
 
 
+# ---------------------------------------------------------------------------
+# /image — attach an image file to the NEXT task (vision models)
+# ---------------------------------------------------------------------------
+def cmd_image(args: List[str]) -> None:
+    from . import chatbox as _cb
+
+    if not args:
+        if _cb.last_attachments:
+            print(f"{ACCENT}pending attachment(s):{RESET}")
+            for a in _cb.last_attachments:
+                print(f"  {MINT}{a['name']}{RESET} {GREY}· {a['bytes']}{RESET}")
+            print(f"{GREY}they ride along with your next submitted task{RESET}")
+        else:
+            print(f"{RED}usage: /image <path-to-png/jpg/webp>{RESET} {GREY}· attaches to your next task{RESET}")
+        return
+    path = " ".join(args).strip().strip('"').strip("'")
+    att = _cb.attach_image(path)
+    if att is None:
+        print(f"{RED}✗ cannot read image: {path}{RESET} {GREY}(png/jpg/jpeg/gif/webp/bmp, ≤12 MB){RESET}")
+        return
+    _cb.last_attachments.append(att)
+    print(f"{GREEN}✔ attached {att['name']}{RESET} {GREY}({att['bytes']}) — submits with your next task{RESET}")
+
+
 def cmd_webdesign(args: List[str], agent: "Agent", enqueue=None) -> None:
     """Studio build: pipeline + brief injected, then the build auto-queues."""
     from . import mcp, webstudio
@@ -1281,6 +1306,8 @@ def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
         cmd_continue(args, agent)
     elif name == "agents":
         cmd_agents(args, agent)
+    elif name == "image":
+        cmd_image(args)
     elif name == "design":
         cmd_design(args, agent)
     elif name == "webdesign":

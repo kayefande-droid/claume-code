@@ -1004,6 +1004,7 @@ class UI:
         self.quiet = quiet
         self._streaming = False
         self._stream_lock = threading.Lock()
+        self._box_aware = True  # reflow the open input box around output
         self.expand_output = False  # show full tool output (toggled by /expand)
         self.mascot = Mascot(enabled=not quiet, mouse_tracking=True)
         self.last_final = ""  # remembered for /copy
@@ -1031,6 +1032,25 @@ class UI:
         print(pixel_tagline(version))
         print()
 
+    # -- box-aware writes -------------------------------------------------
+    @staticmethod
+    def _before_write() -> None:
+        """Wipe the on-screen input box so output never overprints it.
+        Safe from any thread; no-op when no box is open."""
+        if not getattr(UI, "_box_aware", True):
+            return
+        try:
+            from . import chatbox as _cb
+
+            _cb.close_box()
+        except Exception:
+            pass
+
+    def _box_print(self, *args, **kwargs) -> None:
+        """print() that keeps the input box coherent."""
+        self._before_write()
+        print(*args, **kwargs)
+
     # -- streaming ----------------------------------------------------
     def stream_token(self, token: str, buffer: List[str]) -> None:
         if self.quiet:
@@ -1040,6 +1060,7 @@ class UI:
             if not self._streaming:
                 self._streaming = True
             buffer.append(token)
+            self._before_write()
             sys.stdout.write(token.replace("\n", "\n  "))
             sys.stdout.flush()
 
@@ -1068,16 +1089,19 @@ class UI:
         """Begin the '✻ thinking' shimmer (before the model replies)."""
         if self.quiet:
             return
+        self._before_write()
         self.thinking.begin()
 
     def thought_stream_tick(self, frame: int) -> None:
         if self.quiet:
             return
+        self._before_write()
         self.thinking.tick(frame)
 
     def thought_stream_end(self, thought: str = "") -> None:
         if self.quiet:
             return
+        self._before_write()
         if thought:
             self.thinking.set_words(thought)
         self.thinking.end()
@@ -1087,6 +1111,7 @@ class UI:
         """Claude Code style collapsed thought line."""
         if not thought or self.quiet:
             return
+        self._before_write()
         words = " ".join(thought.split())
         head = words[:80] + ("…" if len(words) > 80 else "")
         print(f"{PURPLE}✻ thinking{RESET} {ITALIC}{head}{RESET}")
@@ -1094,16 +1119,17 @@ class UI:
     def render_action(self, tool: str, args: dict, result: str, is_error: bool, _full: bool = False) -> None:
         if self.quiet:
             return
+        self._before_write()
         icon = "✗" if is_error else "✓"
         color = RED if is_error else ACCENT
         summary = str(args.get("path") or args.get("command") or args.get("url") or args.get("query") or "")
         summary = " ".join(str(summary).split())[:70]
-        print(f"{color}{icon} {BOLD}{tool}{RESET} {MUTED}{summary}{RESET}")
+        self._box_print(f"{color}{icon} {BOLD}{tool}{RESET} {MUTED}{summary}{RESET}")
         if result and not self.quiet:
             lines = result.splitlines()
             shown = lines if (_full or self.expand_output) else lines[:14]
             for line in shown:
-                print(f"  {MUTED}│{RESET} {SILVER}{line[:150]}{RESET}")
+                self._box_print(f"  {MUTED}│{RESET} {SILVER}{line[:150]}{RESET}")
             hidden = len(lines) - len(shown)
             if hidden > 0:
                 if not _full:
@@ -1124,18 +1150,22 @@ class UI:
                     if row is not None:
                         self.hint_rows[row] = idx
                 hint = expand_hint(tool, hidden, self.expandable)
-                print(f"  {MUTED}│{RESET} {hint}")
+                self._box_print(f"  {MUTED}│{RESET} {hint}")
 
     def render_error(self, message: str) -> None:
+        self._before_write()
         print(f"{RED}✗ {message}{RESET}")
 
     def render_warning(self, message: str) -> None:
+        self._before_write()
         print(f"{GOLD}⚠ {message}{RESET}")
 
     def render_info(self, message: str) -> None:
+        self._before_write()
         print(f"{BLUE}ℹ {message}{RESET}")
 
     def render_success(self, message: str) -> None:
+        self._before_write()
         print(f"{ACCENT}✔ {message}{RESET}")
 
     def prompt_symbol(self) -> str:

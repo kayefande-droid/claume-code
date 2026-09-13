@@ -204,9 +204,11 @@ pip install SpeechRecognition pyaudio
 /hear                ← speak a command; it runs as if typed
 ```
 
-### The terminal chat box (v2.3.1)
+### The terminal chat box (v2.3.1 – v2.3.3)
 
-The idle prompt is a real line editor now — not plain `input()`:
+The prompt is a real line editor now — not plain `input()` — and since
+v2.3.3 it is **permanent**: the same boxed prompt idle *and* while a task
+runs, always ready for input:
 
 * **`/` command drop** — type `/` and a fuzzy-filtered command panel drops
   down, live as you type; ↑/↓ moves the inverse-video bar, Tab/→ accepts,
@@ -214,6 +216,12 @@ The idle prompt is a real line editor now — not plain `input()`:
 * **`@` file drop** — type `@` to pull files into your prompt as context
   (`@claume/agent.py fix the loop guard`); the panel filters recursively
   from your workspace.
+* **Paste anything** — bracketed paste is enabled, so large multi-line
+  prompts arrive as one chunk with a paste-safe Enter (internal line
+  breaks don't self-submit; Enter at the end does).
+* **`/image <path>`** — attach a png/jpg/webp to your next task; it rides
+  the queue and lands as an OpenAI-style vision payload for
+  vision-capable models. Works for screenshots, mockups, design refs.
 * **Ghost suggestions** — the likeliest continuation from your history
   renders dimmed after the cursor; → accepts it.
 * **History** — ↑/↓ walks the last 200 prompts, persisted in
@@ -222,11 +230,15 @@ The idle prompt is a real line editor now — not plain `input()`:
 * **Edit keys** — Home/End/Left/Right/Backspace/Delete, Ctrl+U clears the
   line, Shift+Tab still cycles permission modes.
 
-While a task runs the box swaps to the live `│ +` prompt (plain input
-there — the worker prints concurrently). Non-interactive/quiet sessions
-fall back to plain `input()` automatically.
+**Never blocked, never overprinted:** the worker wipes the on-screen box
+before printing output and the box reappears below the fresh output on
+your next keystroke. While a task runs the placeholder swaps to
+`task running — type to queue · / for commands · /skip stops it`; plain
+text queues for after the current task, and commands (`/skip`, `/ask`,
+`/model`…) execute immediately without touching the running task.
+Non-interactive/quiet sessions fall back to plain `input()` automatically.
 
-#### The structural frame (v2.3.2)
+#### The structural frame (v2.3.2+)
 
 At boot the REPL draws a Freebuff-style layout — but where Freebuff shows
 ads, claume shows your **real engineering context**:
