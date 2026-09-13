@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from . import config, keyvault, proxy
 from .tools import registry
-from .ui import BLUE, BOLD, DIM, GOLD, GREEN, GREY, MINT, RED, RESET, SILVER, box
+from .ui import ACCENT, BLUE, BOLD, DIM, GOLD, GREEN, GREY, ITALIC, MINT, MUTED, RED, RESET, SILVER, box
 from .version import __version__
 
 if TYPE_CHECKING:
