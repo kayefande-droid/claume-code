@@ -412,11 +412,12 @@ CLEAR_DOWN = "\033[J"
 class Renderer:
     """Draws prompt+buffer on one line and the drop panel below it."""
 
-    def __init__(self, prompt: str, width: int = 100) -> None:
+    def __init__(self, prompt: str, width: int = 100, placeholder: str = "") -> None:
         self.prompt = prompt
         # prompt may contain ANSI escapes — measure the visible length only.
         self.plain_len = len(_strip_ansi(prompt))
         self.width = max(40, min(width, (os.get_terminal_size().columns - 1) if _cols() else 100))
+        self.placeholder = placeholder
         self.rows_drawn = 0  # total lines currently on screen for this frame
 
     def render(self, ed: Editor, ghost: str = "") -> None:
@@ -431,6 +432,9 @@ class Renderer:
         ghost_txt = ""
         if ed.col >= len(line) and ghost:
             ghost_txt = "\033[38;5;240m" + ghost[: max(0, self.width - len(before) - 2)] + RESET
+        elif not line and self.placeholder:
+            # dimmed placeholder while the buffer is empty
+            ghost_txt = "\033[38;5;240m" + self.placeholder[: max(0, self.width - len(before) - 2)] + RESET
         out.append(f"\r{self.prompt}{before}{INVERT}{at_ch}{RESET}{after}{ghost_txt}")
         rows = 1
         if ed.drop:
@@ -480,6 +484,7 @@ def read_line(
     completions: Optional[Callable[[str], List[str]]] = None,
     history: Optional[List[str]] = None,
     on_shift_tab: Optional[Callable[[], None]] = None,
+    placeholder: str = "",
 ) -> str:
     """Read one logical line with the full chat box experience.
 
@@ -503,7 +508,7 @@ def read_line(
         raw_ok = True
 
     ed = Editor(completions=completions, history=history if history is not None else load_history())
-    rend = Renderer(prompt)
+    rend = Renderer(prompt, placeholder=placeholder)
     try:
         while True:
             rend.render(ed, ed.ghost())

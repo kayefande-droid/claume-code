@@ -226,6 +226,23 @@ While a task runs the box swaps to the live `│ +` prompt (plain input
 there — the worker prints concurrently). Non-interactive/quiet sessions
 fall back to plain `input()` automatically.
 
+#### The structural frame (v2.3.2)
+
+At boot the REPL draws a Freebuff-style layout — but where Freebuff shows
+ads, claume shows your **real engineering context**:
+
+* **Status rule bar** — elastic `━` divider with inverted chips:
+  `worki · claume-code` on the left, live session timer + `■ Esc` hint on
+  the right. Re-flows on terminal resize.
+* **Injected System Skills panel** — the active skills with their actual
+  injected instruction-token counts (flagship ui-ux-pro-max first), MCP
+  servers + bridged tool counts, and the effort budget + system-context
+  token estimate guiding every generation. `/frame` redraws it anytime.
+* **Input box with placeholder** — the empty box shows a dimmed
+  `Enter a coding task or / for commands`; the top border carries the
+  live session timer, and the buffer flushes clean the moment you press
+  Enter (your task runs in the background queue).
+
 ### The terminal experience
 
 * **Input box** — every prompt sits inside a bordered box showing the current

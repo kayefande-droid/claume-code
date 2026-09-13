@@ -1249,6 +1249,12 @@ def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
         cmd_queue(args, agent)
     elif name == "mascot":
         cmd_mascot(agent.ui)
+    elif name == "frame":
+        from . import frame as _frame
+
+        _frame.status_bar("worki · claume-code", out=print)
+        print()
+        _frame.skills_panel(out=print)
     elif name == "voice":
         cmd_voice(args, agent.ui)
     elif name == "voice-accent":

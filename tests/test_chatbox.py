@@ -233,6 +233,64 @@ class TestRenderLoop(unittest.TestCase):
             sys.stdout = real_stdout
 
 
+class TestFrame(unittest.TestCase):
+    """The structural REPL frame: status bar, skills panel, input box."""
+
+    def test_status_bar_contains_chips(self):
+        from claume import frame
+
+        line = frame.status_bar("worki · claume-code", "45s")
+        plain = chatbox._strip_ansi(line)
+        self.assertIn("worki · claume-code", plain)
+        self.assertIn("45s", plain)
+        self.assertIn("Esc", plain)
+
+    def test_skills_panel_rows_align_at_widths(self):
+        import io
+        import re
+
+        from claume import frame
+
+        def vis(s):
+            return len(re.sub(r"\033\[[0-9;]*m", "", s))
+
+        for w in (60, 90, 130):
+            old = frame.term_width
+            frame.term_width = lambda w=w: w
+            try:
+                buf = io.StringIO()
+                frame.skills_panel(out=buf.write)
+                lines = [l for l in buf.getvalue().split("\n") if l]
+                widths = {vis(l) for l in lines}
+                self.assertEqual(len(widths), 1, f"ragged rows at w={w}: {widths}")
+            finally:
+                frame.term_width = old
+
+    def test_skills_panel_lists_flagship_first(self):
+        import io
+
+        from claume import frame
+
+        buf = io.StringIO()
+        frame.skills_panel(out=buf.write)
+        out = buf.getvalue()
+        if "ui-ux-pro-max-skill" in out:  # only when seeded/active
+            self.assertLess(out.index("ui-ux-pro-max-skill"), out.index("⬡ mcp"))
+
+    def test_input_box_borders_match(self):
+        from claume import frame
+
+        top = frame.input_box_top_labeled("manual", "proj", "4m12s", width=70)
+        bottom = frame.input_box_bottom_rule(width=70)
+        self.assertEqual(len(chatbox._strip_ansi(top)), len(chatbox._strip_ansi(bottom)))
+        self.assertIn("4m12s", chatbox._strip_ansi(top))
+
+    def test_placeholder_text(self):
+        from claume import frame
+
+        self.assertIn("/", frame.PLACEHOLDER)
+
+
 class TestHistoryPersist(unittest.TestCase):
     def test_append_and_load_roundtrip(self):
         with __import__("tempfile").TemporaryDirectory() as td:

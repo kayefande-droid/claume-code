@@ -23,6 +23,7 @@ from typing import List, Optional
 
 from . import chatbox as _chatbox
 from . import commands, config, proxy, sessions
+from . import frame as _frame
 from . import ui as _ui
 from .agent import Agent
 from .ui import BOLD, RESET, UI
@@ -102,6 +103,29 @@ def _apply_saved_theme() -> None:
     theme = str(config.Config().get("theme", "nvidia-green"))
     if not uimod.set_theme(theme):
         uimod.set_theme("nvidia-green")
+
+
+def _session_clock() -> "list":
+    """Mutable [start_ts] holder for the input-box timer."""
+    return [time.time()]
+
+
+def _fmt_elapsed(start: float) -> str:
+    secs = int(time.time() - start)
+    if secs < 60:
+        return f"{secs}s"
+    return f"{secs // 60}m{secs % 60:02d}s"
+
+
+def _print_frame(workspace: Path, session_label: str = "") -> None:
+    """Structural frame: status rule bar + Injected System Skills panel."""
+    try:
+        _frame.status_bar("worki · claume-code", out=print)
+        print()
+        _frame.skills_panel(out=print)
+        print()
+    except Exception:
+        pass
 
 
 def _print_context_line(workspace: Path) -> None:
@@ -292,7 +316,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         pass
 
     _print_context_line(workspace)
+    # Structural frame: elastic status bar + Injected System Skills panel
+    # (Freebuff's ad slot becomes claume's live engineering context).
+    _print_frame(workspace)
 
+    session_clock = _session_clock()
     agent = Agent(workspace=workspace, ui=ui, confirm_fn=ui.confirm)
 
     # Sessions: flags first, else fresh autosaved session (named by project)
@@ -338,7 +366,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         session_label = data.get("project") or ""
             except Exception:
                 session_label = ""
-            _ui.input_box_top(config.Config().mode, session_label)
+            # top border now carries the live session timer on the right
+            print(_frame.input_box_top_labeled(
+                config.Config().mode, session_label, _fmt_elapsed(session_clock[0])
+            ))
             # The chat box redraws this line itself — carry the left border
             # inside the prompt instead of pre-writing it.
             prompt = f"{_ui.MUTED}│{_ui.RESET} {_ui.ACCENT}{_ui.BOLD}❯{_ui.RESET} "
@@ -360,7 +391,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not use_chatbox:
                 line = input(prompt).strip()
             else:
-                line = _chatbox.read_line(prompt, on_shift_tab=_on_shift_tab).strip()
+                line = _chatbox.read_line(
+                    prompt, on_shift_tab=_on_shift_tab,
+                    placeholder=_frame.PLACEHOLDER,
+                ).strip()
         except EOFError:
             print(f"\n{_ui.GREY}bye ✦{RESET}")
             task_queue.put(None)
@@ -388,7 +422,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 0
         finally:
             if use_input_box and not busy:
-                _ui.input_box_bottom()
+                print(_frame.input_box_bottom_rule())
 
         if not line:
             continue
