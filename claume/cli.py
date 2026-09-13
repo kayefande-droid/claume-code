@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from . import chatbox as _chatbox
 from . import commands, config, proxy, sessions
 from . import ui as _ui
 from .agent import Agent
@@ -338,12 +339,28 @@ def main(argv: Optional[List[str]] = None) -> int:
             except Exception:
                 session_label = ""
             _ui.input_box_top(config.Config().mode, session_label)
-            prompt = _ui.input_box_prompt()
+            # The chat box redraws this line itself — carry the left border
+            # inside the prompt instead of pre-writing it.
+            prompt = f"{_ui.MUTED}│{_ui.RESET} {_ui.ACCENT}{_ui.BOLD}❯{_ui.RESET} "
         else:
             prompt = ui.prompt_symbol()
 
+        # --- read input through the Freebuff-style chat box (drops,
+        # ghost suggestions, history, Alt+Enter multiline); plain input()
+        # when quiet or non-interactive.
+        def _on_shift_tab() -> None:
+            _cycle_mode(agent)
+
+        # The chat box owns the idle prompt; while a task runs (worker
+        # prints concurrently) plain input() keeps output coherent.
+        use_chatbox = (
+            not busy and not quiet and sys.stdin.isatty() and use_input_box
+        )
         try:
-            line = input(prompt).strip()
+            if not use_chatbox:
+                line = input(prompt).strip()
+            else:
+                line = _chatbox.read_line(prompt, on_shift_tab=_on_shift_tab).strip()
         except EOFError:
             print(f"\n{_ui.GREY}bye ✦{RESET}")
             task_queue.put(None)
@@ -359,7 +376,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 continue
             print(f"\n{_ui.GREY}press ctrl+c again or /exit to quit · /skip stops a running task{RESET}")
             try:
-                line = input(prompt).strip()
+                if not use_chatbox:
+                    line = input(prompt).strip()
+                else:
+                    line = _chatbox.read_line(prompt, on_shift_tab=_on_shift_tab).strip()
             except (EOFError, KeyboardInterrupt):
                 print(f"\n{_ui.GREY}bye ✦{RESET}")
                 task_queue.put(None)

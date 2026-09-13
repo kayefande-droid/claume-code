@@ -204,6 +204,28 @@ pip install SpeechRecognition pyaudio
 /hear                ← speak a command; it runs as if typed
 ```
 
+### The terminal chat box (v2.3.1)
+
+The idle prompt is a real line editor now — not plain `input()`:
+
+* **`/` command drop** — type `/` and a fuzzy-filtered command panel drops
+  down, live as you type; ↑/↓ moves the inverse-video bar, Tab/→ accepts,
+  Enter submits.
+* **`@` file drop** — type `@` to pull files into your prompt as context
+  (`@claume/agent.py fix the loop guard`); the panel filters recursively
+  from your workspace.
+* **Ghost suggestions** — the likeliest continuation from your history
+  renders dimmed after the cursor; → accepts it.
+* **History** — ↑/↓ walks the last 200 prompts, persisted in
+  `~/.claume/input_history`.
+* **Multi-line** — Alt+Enter inserts a newline for long prompts.
+* **Edit keys** — Home/End/Left/Right/Backspace/Delete, Ctrl+U clears the
+  line, Shift+Tab still cycles permission modes.
+
+While a task runs the box swaps to the live `│ +` prompt (plain input
+there — the worker prints concurrently). Non-interactive/quiet sessions
+fall back to plain `input()` automatically.
+
 ### The terminal experience
 
 * **Input box** — every prompt sits inside a bordered box showing the current
