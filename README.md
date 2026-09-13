@@ -9,10 +9,36 @@
  ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝
 ```
 
-**claume-code v2.3** is a pixel-animated **desktop CLI coding agent** (not a web app)
-that builds full projects from natural-language prompts — inspired by Claude Code and
-Freebuff, powered **free** by NVIDIA NIM through the built-in **free-claume proxy**.
+**claume-code v2.5** is a pixel-animated **desktop CLI coding agent** by
+**kayefande-droid** (not a web app) that builds full projects from
+natural-language prompts — inspired by Claude Code, powered **free** by
+NVIDIA NIM through the built-in **free-claume proxy**.
 claume always identifies as **claume** — never Claude, never ChatGPT.
+
+> a **kayefande-droid** product — designed, built and maintained by
+> [github.com/kayefande-droid](https://github.com/kayefande-droid)
+
+### Three visual channels (thought ≠ input ≠ answer)
+
+The transcript is color- and structure-coded so you always know who is
+speaking:
+
+```
+❯ you
+ fix the login bug                    ← bright accent, flush-left
+
+◇ thinking · 3.2s
+      auth module first, then the     ← dim italic violet, deep indent
+      token refresh path…             (working memory, not the answer)
+
+◆ claume · final
+    Fixed. The refresh window now     ← solid rail, bold header, indented
+    pads clock skew by 30s.           body, blank line after
+```
+
+Thoughts are compact analytical summaries (≤ ~40 words, dim italic);
+your input is flush-left bright; the final answer is a full indented
+block with breathing room. Nothing bleeds together.
 
 > 🎬 Pixel banner + **mouse-tracking bot mascot** · 🧠 extended-thinking ReAct loop with
 > **animated ✻ thinking shimmer** · 🛠 21 built-in tools · 🌐 free-claume proxy
@@ -22,7 +48,7 @@ claume always identifies as **claume** — never Claude, never ChatGPT.
 > design pipeline** · 📚 **skills system** (ui-ux-pro-max ships pre-activated)
 > · 🎨 **webstudio: pulls real Google Fonts + assets into your builds**
 > · 🎙 **AI voice out + voice commands** (British male/female accents)
-> · 💬 **Freebuff-style input box** · ⧉ **click-and-pull copy mode**
+> · 💬 **pinned chat box** · ⧉ **click-and-pull copy mode**
 > · 🎭 **4 permission modes** (manual / accept / plan / auto, Shift+Tab)
 > · 💾 **named persistent sessions with activity log** (see exactly what claume did)
 > · 🤖 parallel subagents · 🎨 7 color themes · 🚀 **effort levels incl. ultra**
@@ -106,7 +132,7 @@ claume
 ❯ /effort ultra    ← maximum effort: 90 steps, 160 tool calls, 12 auto-continues
 ```
 
-### Live-input REPL — type while it works (Freebuff-style)
+### Live-input REPL — type while it works (live-input REPL)
 
 The prompt never blocks. While a task runs you can keep typing:
 
@@ -219,7 +245,7 @@ pip install SpeechRecognition pyaudio
 The prompt is a real line editor now — not plain `input()` — and since
 v2.3.4 it is a **pinned bottom box**: it lives in the last rows of the
 terminal and never moves. A VT scroll region keeps the transcript
-scrolling *above* the box while you type — the exact Freebuff mechanic:
+scrolling *above* the box while you type — a true pinned-box mechanic:
 
 * **Pinned, never reflows** — output (tasks, thoughts, tool lines)
   scrolls the region above the box; the box itself is absolutely
@@ -258,7 +284,7 @@ use plain `input()` automatically.
 
 #### The structural frame (v2.3.2+)
 
-At boot the REPL draws a Freebuff-style layout — but where Freebuff shows
+At boot the REPL draws a structural layout — the ad slot other agents rent out
 ads, claume shows your **real engineering context**:
 
 * **Status rule bar** — elastic `━` divider with inverted chips:
@@ -276,7 +302,7 @@ ads, claume shows your **real engineering context**:
 ### The terminal experience
 
 * **Input box** — every prompt sits inside a bordered box showing the current
-  mode and session project (Freebuff-style), like:
+  mode and session project (live-input REPL), like:
 
   ```
   ╭──────────────── manual · my-app ────────────────╮
@@ -468,6 +494,29 @@ start is instant. `animation-motion` ships the same way.
 └── motion-dev-mcp/ ← bundled animation server
 ```
 
+## Social, email & payouts — claume reach
+
+`/social`, `/email` and `/payout` connect claume to the outside world
+(free-first, bring-your-own-credentials, confirmation-gated):
+
+* **Telegram channel** (`/social`) — the only fully-free, bot-first
+  platform: create a channel, paste the @BotFather token + chat id once,
+  and claume posts text, images and video natively (Bot API, stdlib).
+  `/social setup telegram` walks you through it in 3 steps.
+* **Email** (`/email`) — Gmail/Outlook/Yahoo via free app passwords:
+  `/email setup` saves SMTP/IMAP once, then `/email send …` delivers
+  mail and `/email inbox` lists unread messages **extracting
+  verification links** so signup flows finish in seconds.
+* **Payouts** (`/payout`) — every monetization event lands in a local
+  ledger (`~/.claume/reach/ledger.json`). Payout requests target the
+  MTN Cameroon Mobile Money account and **always require your explicit
+  y/N confirmation** — claume records the intent and the free rails
+  (Telegram/TON → P2P → MoMo, or email-coordinated transfer); it never
+  moves money autonomously.
+* **Passwords** — stdlib `secrets`-based generator for app passwords;
+  secrets live only in the local keyvault and are scrubbed from
+  transcripts.
+
 ## Web design capability — claume studio
 
 claume builds **human-designed, luxurious** websites and app UIs — its own
@@ -624,4 +673,6 @@ python -m unittest discover -s tests -v
 
 ---
 
-MIT © TRacKay — built with [Freebuff](https://freebuff.com) 🤖
+MIT © **kayefande-droid** — claume is an original kayefande-droid product.
+(Design inspiration for the terminal aesthetic is credited to Freebuff;
+all code, branding and the claume project itself are kayefande-droid's.) 🤖

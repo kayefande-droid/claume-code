@@ -55,6 +55,9 @@ HELP_LINES = [
     f"  {MINT}/design{RESET} <prompt>  run the MCP design pipeline (Link System)",
     f"  {MINT}/image{RESET} <path>    attach an image (png/jpg/webp) to your next task",
     f"  {MINT}/ide{RESET}            IDE integration status · /ide open <path> [line] · /ide reveal <path>",
+    f"  {MINT}/social{RESET}         Telegram channel: setup · post · post-image · post-video",
+    f"  {MINT}/email{RESET}          send mail + read inbox (verification links) — free app-password setup",
+    f"  {MINT}/payout{RESET}         monetization ledger + MTN MoMo payout intents (confirmation-gated)",
     f"  {MINT}/webdesign{RESET} <prompt>  build a website/UI now — studio brief + real fonts/assets",
     f"  {MINT}/mcp-preset{RESET} <name>  install a server preset (design)",
     f"  {MINT}/keys{RESET}             list vaulted API keys (masked)",
@@ -1160,6 +1163,162 @@ def cmd_design(args: List[str], agent: "Agent") -> None:
 # ---------------------------------------------------------------------------
 # /image — attach an image file to the NEXT task (vision models)
 # ---------------------------------------------------------------------------
+def cmd_social(args: List[str], agent: "Agent") -> None:
+    """/social — Telegram channel posting (free bot-first platform)."""
+    from . import keyvault, reach
+
+    if not args or args[0] in ("status", ""):
+        print(f"{ACCENT}📣 social{RESET} {GREY}· {reach.status()}{RESET}")
+        print(f"{GREY}  setup:  {MINT}/social setup telegram{RESET} {GREY}→ prompts for bot token + channel id{RESET}")
+        print(f"{GREY}  post:   {MINT}/social post <text>{RESET} {GREY}· {MINT}/social post-image <path> <text>{RESET}{GREY} · {MINT}/social post-video <path> <text>{RESET}")
+        print(f"{GREY}  free channel guide: t.me → New Channel → add your bot as admin{RESET}")
+        return
+    sub = args[0]
+    if sub == "setup":
+        platform = (args[1] if len(args) > 1 else "telegram").lower()
+        if platform != "telegram":
+            print(f"{GREY}only Telegram is free + bot-first today. Others (X, TikTok, YouTube) need their own developer accounts — configure via /key <NAME> once you have tokens.{RESET}")
+            return
+        print(f"{ACCENT}Telegram channel setup (free):{RESET}")
+        print(f"  1. In Telegram: message {MINT}@BotFather{RESET} → /newbot → save the token")
+        print(f"  2. Create a channel (e.g. {MINT}Claume AI{RESET}) → add your bot as ADMIN")
+        print(f"  3. Get the channel id: forward a channel post to {MINT}@userinfobot{RESET} or use @RawDataBot")
+        try:
+            token = input(f"  {GOLD}paste bot token{RESET} ").strip()
+            chat = input(f"  {GOLD}paste channel chat id{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n{GREY}setup cancelled{RESET}")
+            return
+        if token and chat:
+            keyvault.set_key("TELEGRAM_BOT_TOKEN", token)
+            keyvault.set_key("TELEGRAM_CHAT_ID", chat)
+            print(f"{GREEN}✔ telegram configured — try {MINT}/social post hello world{RESET}")
+        else:
+            print(f"{GREY}nothing saved{RESET}")
+        return
+    if sub == "post":
+        text = " ".join(args[1:]).strip()
+        if not text:
+            print(f"{RED}usage: /social post <text>{RESET}")
+            return
+        msg, err = reach.telegram_post(text)
+        (print if not err else lambda m: print(f"{RED}{m}{RESET}"))(msg)
+        return
+    if sub in ("post-image", "post-video"):
+        if len(args) < 3:
+            print(f"{RED}usage: /social {sub} <media-path> <caption>{RESET}")
+            return
+        media = args[1]
+        caption = " ".join(args[2:])
+        msg, err = (
+            reach.telegram_post(caption, image_path=media)
+            if sub == "post-image"
+            else reach.telegram_post(caption, video_path=media)
+        )
+        (print if not err else lambda m: print(f"{RED}{m}{RESET}"))(msg)
+        return
+    print(f"{RED}unknown /social subcommand: {sub}{RESET}")
+
+
+def cmd_email(args: List[str], agent: "Agent") -> None:
+    """/email — SMTP/IMAP: send mail, check inbox for verification links."""
+    from . import keyvault, reach
+
+    if not args or args[0] == "status":
+        configured = reach._smtp_config() is not None
+        print(f"{ACCENT}✉ email{RESET} {GREY}· {'configured' if configured else 'not configured'}{RESET}")
+        if not configured:
+            print(f"{GREY}  setup:  {MINT}/email setup{RESET} {GREY}— Gmail: enable 2FA, create an app password{RESET}")
+            print(f"{GREY}  ({MINT}https://myaccount.google.com/apppasswords{RESET}{GREY}) — free, no cost{RESET}")
+        print(f"{GREY}  send:   {MINT}/email send <to> <subject> <body>{RESET}")
+        print(f"{GREY}  inbox:  {MINT}/email inbox{RESET} {GREY}— list unread + extract verification links{RESET}")
+        return
+    sub = args[0]
+    if sub == "setup":
+        presets = {
+            "gmail.com": ("smtp.gmail.com", "imap.gmail.com", "587"),
+            "outlook.com": ("smtp-mail.outlook.com", "outlook.office365.com", "587"),
+            "yahoo.com": ("smtp.mail.yahoo.com", "imap.mail.yahoo.com", "587"),
+        }
+        print(f"{ACCENT}email setup{RESET} {GREY}— works with any provider via app password{RESET}")
+        try:
+            addr = input(f"  {GOLD}email address{RESET} ").strip()
+            pw = input(f"  {GOLD}app password (input hidden in transcripts){RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n{GREY}setup cancelled{RESET}")
+            return
+        domain = addr.split("@")[-1].lower() if "@" in addr else ""
+        smtp_h, imap_h, port = presets.get(domain, ("", "", "587"))
+        if not smtp_h:
+            try:
+                smtp_h = input(f"  {GOLD}SMTP host{RESET} ").strip()
+                imap_h = input(f"  {GOLD}IMAP host{RESET} ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return
+        if addr and pw:
+            keyvault.set_key("SMTP_USER", addr)
+            keyvault.set_key("SMTP_PASS", pw)
+            keyvault.set_key("SMTP_HOST", smtp_h)
+            keyvault.set_key("SMTP_PORT", port)
+            keyvault.set_key("IMAP_HOST", imap_h)
+            keyvault.set_key("OWNER_EMAIL", addr)
+            print(f"{GREEN}✔ email configured ({smtp_h}) — try {MINT}/email inbox{RESET}")
+        else:
+            print(f"{GREY}nothing saved{RESET}")
+        return
+    if sub == "send":
+        if len(args) < 4:
+            print(f"{RED}usage: /email send <to> <subject> <body...>{RESET}")
+            return
+        to, subject, body = args[1], args[2], " ".join(args[3:])
+        msg, err = reach.send_email(to, subject, body)
+        (print if not err else lambda m: print(f"{RED}{m}{RESET}"))(msg)
+        return
+    if sub == "inbox":
+        msg, err = reach.check_inbox()
+        (print if not err else lambda m: print(f"{RED}{m}{RESET}"))(msg)
+        return
+    print(f"{RED}unknown /email subcommand: {sub}{RESET}")
+
+
+def cmd_payout(args: List[str], agent: "Agent") -> None:
+    """/payout — ledger + MTN MoMo payout intents (confirmation-gated)."""
+    from . import keyvault, reach
+
+    if not args or args[0] in ("status", "ledger"):
+        print(f"{ACCENT}💰 payout ledger{RESET}")
+        print(f"  {reach.ledger_summary()}")
+        momo = keyvault.resolve_key("MOMO_NUMBER") or "+237 678302909"
+        print(f"{GREY}  target: MTN MoMo {MINT}{momo}{RESET}")
+        print(f"{GREY}  record income:  {MINT}/payout income <amount> <source>{RESET}")
+        print(f"{GREY}  request payout: {MINT}/payout request <amount>{RESET} {GREY}— always needs your OK{RESET}")
+        return
+    sub = args[0]
+    if sub == "income":
+        if len(args) < 3 or not args[1].replace(".", "").isdigit():
+            print(f"{RED}usage: /payout income <amount> <source...>{RESET}")
+            return
+        reach.ledger_add({"type": "income", "amount": float(args[1]), "source": " ".join(args[2:])})
+        print(f"{GREEN}✔ income recorded{RESET} — {reach.ledger_summary().splitlines()[0]}")
+        return
+    if sub == "request":
+        if len(args) < 2 or not args[1].replace(".", "").isdigit():
+            print(f"{RED}usage: /payout request <amount>{RESET}")
+            return
+        amount = float(args[1])
+        try:
+            ok = input(f"  {GOLD}confirm payout of {amount} XAF to MTN MoMo +237 678302909? [y/N]{RESET} ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ok = ""
+        if ok not in ("y", "yes"):
+            print(f"{GREY}payout cancelled — nothing moved{RESET}")
+            return
+        msg, err = reach.momo_payout_instruction(amount)
+        (print if not err else lambda m: print(f"{RED}{m}{RESET}"))(msg)
+        return
+    print(f"{RED}unknown /payout subcommand: {sub}{RESET}")
+
+
 def cmd_ide(args: List[str]) -> None:
     """Show hosting-IDE integration status; /ide open <path> [line] jumps."""
     from . import ide as _ide
@@ -1340,6 +1499,12 @@ def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
         cmd_image(args)
     elif name == "ide":
         cmd_ide(args)
+    elif name == "social":
+        cmd_social(args, agent)
+    elif name == "email":
+        cmd_email(args, agent)
+    elif name == "payout":
+        cmd_payout(args, agent)
     elif name == "design":
         cmd_design(args, agent)
     elif name == "webdesign":

@@ -101,6 +101,12 @@ parrot the task back. Instead:
 If a previous action failed, name the root cause before choosing the
 next action. Never repeat a failed action unchanged. If you find
 yourself guessing about file contents, READ the file first.
+
+Thoughts render in a distinct dim-italic channel separate from your
+final answer. Keep each thought under ~40 words: crisp analytical
+summaries, not essays. Never put code or file contents in "thought" —
+that belongs in tool calls. The "final" field is the user-facing
+answer: complete, well-structured, and self-sufficient.
 """
 
 REACT_CONTRACT = """## ReAct contract (STRICT)

@@ -233,7 +233,14 @@ def _make_worker(agent: Agent, ui: UI, task_queue: "queue.Queue", box_state: dic
         uimod = _ui
         _chatbox.close_box()
         if final and final not in ("(no final answer produced)", "(interrupted by user)"):
-            print(f"\n{uimod.ACCENT}❯{RESET} {BOLD}{final}{RESET}\n")
+            try:
+                from . import style as _st
+
+                print()
+                print(_st.render_channel("answer", final))
+                print()
+            except Exception:
+                print(f"\n{uimod.ACCENT}❯{RESET} {BOLD}{final}{RESET}\n")
             ui.last_final = final
             if config.Config().get("auto_copy", True):
                 try:

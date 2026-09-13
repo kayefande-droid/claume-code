@@ -226,7 +226,7 @@ def animate_banner(fast: bool = False) -> None:
 def pixel_tagline(version: str) -> str:
     return (
         f"{MUTED}▌{SOFT} pixel-grade coding agent {MUTED}· v{version} "
-        f"· free-claume proxy · NVIDIA NIM{RESET}"
+        f"· free-claume proxy · NVIDIA NIM · {SOFT}a kayefande-droid product{RESET}"
     )
 
 
@@ -785,10 +785,21 @@ class ThinkingPanel:
         elapsed = int(time.time() - self._start)
         if COLOR and sys.stdout.isatty():
             sys.stdout.write("\r" + " " * max(self._line_len, 40) + "\r")
-        if self._words:
-            print(f"{PURPLE}✻ thought{RESET} {MUTED}({elapsed}s){RESET} {ITALIC}{self._words}{RESET}")
-        else:
-            print(f"{PURPLE}✻ thought{RESET} {MUTED}({elapsed}s){RESET}")
+        try:
+            from . import style as _st
+
+            print(
+                _st.render_channel(
+                    "thought",
+                    self._words or "(completed)",
+                    note=f"{elapsed}s",
+                )
+            )
+        except Exception:
+            if self._words:
+                print(f"{PURPLE}✻ thought{RESET} {MUTED}({elapsed}s){RESET} {ITALIC}{self._words}{RESET}")
+            else:
+                print(f"{PURPLE}✻ thought{RESET} {MUTED}({elapsed}s){RESET}")
         self._start = None
 
 
@@ -1113,8 +1124,13 @@ class UI:
             return
         self._before_write()
         words = " ".join(thought.split())
-        head = words[:80] + ("…" if len(words) > 80 else "")
-        print(f"{PURPLE}✻ thinking{RESET} {ITALIC}{head}{RESET}")
+        try:
+            from . import style as _st
+
+            print(_st.render_channel("thought", _st.wrap(words)[0] if words else "", note="reasoning"))
+        except Exception:
+            head = words[:80] + ("…" if len(words) > 80 else "")
+            print(f"{PURPLE}✻ thinking{RESET} {ITALIC}{head}{RESET}")
 
     def render_action(self, tool: str, args: dict, result: str, is_error: bool, _full: bool = False) -> None:
         if self.quiet:

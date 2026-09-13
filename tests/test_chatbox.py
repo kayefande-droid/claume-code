@@ -595,5 +595,85 @@ class TestIdeIntegration(unittest.TestCase):
         self.assertIn("ide_open(path", registry.schemas())
 
 
+class TestStyleChannels(unittest.TestCase):
+    """v2.5.0: distinct visual channels for thought / user / answer."""
+
+    def test_render_channel_glyphs(self):
+        from claume import style
+
+        thought = style.render_channel("thought", "checking the auth flow")
+        self.assertIn("◇ thinking", thought)
+        self.assertIn("checking the auth flow", thought)
+
+        answer = style.render_channel("answer", "Done — tests pass.")
+        self.assertIn("◆ claume", answer)
+        self.assertIn("Done — tests pass.", answer)
+
+        user = style.render_channel("user", "fix the bug")
+        self.assertIn("❯ you", user)
+        self.assertIn("fix the bug", user)
+
+    def test_channels_are_visually_distinct(self):
+        from claume import style
+
+        t = style.render_channel("thought", "reasoning here")
+        a = style.render_channel("answer", "the answer here")
+        # different glyphs AND different indent depth
+        self.assertNotIn("◇", a)
+        self.assertNotIn("◆", t)
+        t_indent = len(t.splitlines()[1]) - len(t.splitlines()[1].lstrip())
+        a_indent = len(a.splitlines()[1]) - len(a.splitlines()[1].lstrip())
+        self.assertNotEqual(t_indent, a_indent)
+
+    def test_wrapping_with_hanging_indent(self):
+        from claume import style
+
+        text = "word " * 60
+        lines = style.wrap(text, width=60, indent=4)
+        self.assertGreater(len(lines), 1)
+        for ln in lines[1:]:
+            self.assertEqual(len(ln), len(ln.lstrip()) + 0)  # no leading spaces (caller pads)
+
+    def test_blank_line_rules(self):
+        from claume import style
+
+        self.assertTrue(style.blank_before("answer"))
+        self.assertTrue(style.blank_before("user"))
+        self.assertFalse(style.blank_before("thought"))
+        self.assertTrue(style.blank_after("answer"))
+        self.assertFalse(style.blank_after("thought"))
+
+    def test_password_generator(self):
+        from claume import reach
+
+        pw = reach.generate_password(24)
+        self.assertEqual(len(pw), 24)
+        self.assertTrue(any(c.islower() for c in pw))
+        self.assertTrue(any(c.isupper() for c in pw))
+        self.assertTrue(any(c.isdigit() for c in pw))
+        self.assertNotEqual(pw, reach.generate_password(24))
+
+    def test_reach_guards_without_credentials(self):
+        import tempfile as _tf
+        from claume import reach
+
+        old_home = os.environ.get("CLAUUME_HOME")
+        try:
+            os.environ["CLAUUME_HOME"] = _tf.mkdtemp()
+            msg, err = reach.telegram_post("x")
+            self.assertTrue(err)
+            self.assertIn("not configured", msg)
+            msg, err = reach.send_email("a@b.c", "s", "b")
+            self.assertTrue(err)
+            msg, err = reach.momo_payout_instruction(100)
+            self.assertFalse(err)  # intent records fine, money never moves
+            self.assertIn("+237 678302909", msg)
+        finally:
+            if old_home is None:
+                os.environ.pop("CLAUUME_HOME", None)
+            else:
+                os.environ["CLAUUME_HOME"] = old_home
+
+
 if __name__ == "__main__":
     unittest.main()
