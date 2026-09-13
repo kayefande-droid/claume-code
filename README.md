@@ -204,14 +204,22 @@ pip install SpeechRecognition pyaudio
 /hear                ← speak a command; it runs as if typed
 ```
 
-### The terminal chat box (v2.3.1 – v2.3.3)
+### The terminal chat box (v2.3.1 – v2.3.4)
 
 The prompt is a real line editor now — not plain `input()` — and since
-v2.3.3 it is **permanent**: the same boxed prompt idle *and* while a task
-runs, always ready for input:
+v2.3.4 it is a **pinned bottom box**: it lives in the last rows of the
+terminal and never moves. A VT scroll region keeps the transcript
+scrolling *above* the box while you type — the exact Freebuff mechanic:
 
+* **Pinned, never reflows** — output (tasks, thoughts, tool lines)
+  scrolls the region above the box; the box itself is absolutely
+  positioned and redraws only its own rows. Typing while output streams
+  keeps your cursor and text intact.
+* **Clears on Enter** — the submitted prompt echoes into the transcript
+  and the input row returns empty, still pinned, ready for the next task
+  while the first runs above it.
 * **`/` command drop** — type `/` and a fuzzy-filtered command panel drops
-  down, live as you type; ↑/↓ moves the inverse-video bar, Tab/→ accepts,
+  into the box's own rows; ↑/↓ moves the inverse-video bar, Tab/→ accepts,
   Enter submits.
 * **`@` file drop** — type `@` to pull files into your prompt as context
   (`@claume/agent.py fix the loop guard`); the panel filters recursively
@@ -230,13 +238,13 @@ runs, always ready for input:
 * **Edit keys** — Home/End/Left/Right/Backspace/Delete, Ctrl+U clears the
   line, Shift+Tab still cycles permission modes.
 
-**Never blocked, never overprinted:** the worker wipes the on-screen box
-before printing output and the box reappears below the fresh output on
-your next keystroke. While a task runs the placeholder swaps to
-`task running — type to queue · / for commands · /skip stops it`; plain
-text queues for after the current task, and commands (`/skip`, `/ask`,
-`/model`…) execute immediately without touching the running task.
-Non-interactive/quiet sessions fall back to plain `input()` automatically.
+**Never blocked, never overprinted:** while a task runs the input row's
+placeholder swaps to `task running — type to queue · / for commands ·
+/skip stops it`; plain text queues for after the current task, and
+commands (`/skip`, `/ask`, `/model`…) execute immediately without
+touching the running task. Terminals without VT scroll-region support
+fall back to the flowing chat box, and non-interactive/quiet sessions
+use plain `input()` automatically.
 
 #### The structural frame (v2.3.2+)
 

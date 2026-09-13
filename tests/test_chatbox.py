@@ -391,5 +391,112 @@ class TestBoxLifecycle(unittest.TestCase):
             tmp.unlink(missing_ok=True)
 
 
+class TestPinboxGeometry(unittest.TestCase):
+    """v2.3.4: pinned bottom box via VT scroll regions (Freebuff style)."""
+
+    class _FakeOut:
+        def __init__(self):
+            self.data = []
+
+        def write(self, s):
+            self.data.append(s)
+            return len(s)
+
+        def flush(self):
+            pass
+
+        def isatty(self):
+            return True
+
+        encoding = "utf-8"
+
+    def setUp(self):
+        from claume import pinbox
+
+        self.pb = pinbox
+        self.real_stdout = sys.stdout
+        self.real_stdin = sys.stdin
+        self.fake = self._FakeOut()
+        pinbox._term = lambda: (100, 30)
+        sys.stdin = type("S", (), {"isatty": lambda self: True})()
+        sys.stdout = self.fake
+
+    def tearDown(self):
+        self.pb._STATE["ed"] = None
+        self.pb.leave()
+        sys.stdout = self.real_stdout
+        sys.stdin = self.real_stdin
+
+    def test_non_tty_refused(self):
+        import io
+
+        sys.stdin = io.StringIO()
+        self.assertFalse(self.pb.enter())
+        self.assertFalse(self.pb.pinned())
+
+    def test_enter_sets_scroll_region(self):
+        self.assertTrue(self.pb.enter())
+        data = "".join(self.fake.data)
+        # 30 rows - 6 reserve = row 24 is the region bottom
+        self.assertIn("\x1b[1;24r", data)
+
+    def test_box_rows_absolutely_positioned(self):
+        self.assertTrue(self.pb.enter())
+        self.fake.data.clear()
+        self.pb._draw_box()
+        data = "".join(self.fake.data)
+        for row in (25, 26, 27, 28, 29, 30):
+            self.assertIn(f"\x1b[{row};1H", data)
+
+    def test_output_scrolls_region_not_box(self):
+        self.assertTrue(self.pb.enter())
+        # open an editor so the cursor sits inside the box
+        ed = self.pb._cb.Editor()
+        for ch in "typing":
+            ed.key(ch)
+        self.pb._STATE["ed"] = ed
+        self.pb._draw_box()
+        self.fake.data.clear()
+        print("worker output")
+        import time
+
+        time.sleep(0.05)
+        data = "".join(self.fake.data)
+        # parked at region bottom before writing
+        self.assertIn("\x1b[24;1H", data)
+        self.assertIn("worker output", data)
+        # the output burst itself never touches box rows; after it, the
+        # input row is legitimately redrawn (cursor snap-back) — verify
+        # the redraw still contains the user's in-progress typing
+        self.assertIn("typing", data.split("worker output", 1)[1])
+        # borders/drops/bottom were never redrawn by the output path
+        self.assertNotIn("\x1b[25;1H\x1b[2K", data)
+        self.assertNotIn("\x1b[30;1H\x1b[2K", data)
+
+    def test_finalize_echoes_and_clears_input_row(self):
+        self.assertTrue(self.pb.enter())
+        self.fake.data.clear()
+        self.pb.finalize("build a portfolio")
+        data = "".join(self.fake.data)
+        self.assertIn("build a portfolio", data)
+        self.assertIn("\x1b[26;1H", data)  # input row redrawn empty
+
+    def test_leave_resets_region(self):
+        self.assertTrue(self.pb.enter())
+        self.pb.leave()
+        self.assertFalse(self.pb.pinned())
+        self.assertIn("\x1b[r", "".join(self.fake.data))
+
+    def test_busy_hint_swaps_placeholder(self):
+        self.assertTrue(self.pb.enter())
+        self.pb.set_busy(True)
+        self.pb._STATE["placeholder"] = "Enter a coding task or / for commands"
+        self.fake.data.clear()
+        self.pb._draw_box()
+        plain = "".join(self.fake.data)
+        plain = plain.replace("\x1b[38;5;240m", "").replace("\x1b[0m", "")
+        self.assertIn("task running", plain)
+
+
 if __name__ == "__main__":
     unittest.main()

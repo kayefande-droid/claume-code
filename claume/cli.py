@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import chatbox as _chatbox
-from . import commands, config, proxy, sessions
+from . import commands, config, pinbox, proxy, sessions
 from . import frame as _frame
 from . import ui as _ui
 from .agent import Agent
@@ -364,19 +364,28 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     use_input_box = bool(config.Config().get("input_box", True)) and not quiet
 
+    # Border labels for the pinned box: mode · project on the left, live
+    # session timer on the right. Refreshed each REPL iteration via the
+    # mutable dict (cheap reads from the pinbox watcher thread).
+    border = {"left": " claume ", "right": ""}
+
+    def _border_labels() -> "tuple":
+        return border["left"], border["right"]
+
+    if use_input_box and sys.stdin.isatty():
+        pinbox.enter(labels=_border_labels)
+
     def _echo_typed(line: str) -> None:
-        """Echo what the user typed mid-run so the transcript reads correctly."""
-        if not ui.quiet:
+        """Echo what the user typed mid-run so the transcript reads correctly.
+        (When pinned, the submission was already echoed by pinbox.finalize.)"""
+        if not ui.quiet and not pinbox.pinned():
             print(f"{_ui.MUTED}│{RESET} {_ui.SILVER}{line}{RESET}")
 
     while True:
         busy = agent.is_busy() or not task_queue.empty()
+        pinbox.set_busy(busy)
 
-        # --- prompt: the boxed chat box is PERMANENT — same look busy or
-        # idle; only the placeholder row changes (task running… vs Enter a
-        # coding task…). Nothing prints over it: worker output closes the
-        # box first (see _print_outside_box) and the next keystroke
-        # redraws it under the fresh output.
+        # --- border labels + prompt -------------------------------
         session_label = ""
         try:
             if agent.session_id:
@@ -385,7 +394,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     session_label = data.get("project") or ""
         except Exception:
             session_label = ""
-        prompt = f"{_ui.MUTED}│{_ui.RESET} {_ui.ACCENT}{_ui.BOLD}❯{_ui.RESET} "
+        border["left"] = f" {config.Config().mode} · {session_label or 'claume'} "
+        border["right"] = f" {_fmt_elapsed(session_clock[0])} "
+        prompt = f"{_ui.ACCENT}{_ui.BOLD}❯{_ui.RESET} "
         if not use_input_box:
             prompt = _ui.busy_prompt() if busy else ui.prompt_symbol()
 
@@ -399,6 +410,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             if not use_chatbox:
                 line = input(prompt).strip()
+            elif pinbox.pinned():
+                line = pinbox.read_line(
+                    prompt, busy=busy,
+                    placeholder=_frame.PLACEHOLDER,
+                    on_shift_tab=_on_shift_tab,
+                ).strip()
             else:
                 line = _chatbox.read_line(
                     prompt, on_shift_tab=_on_shift_tab,
@@ -406,6 +423,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     busy=busy,
                 ).strip()
         except EOFError:
+            pinbox.leave()
             print(f"\n{_ui.GREY}bye ✦{RESET}")
             task_queue.put(None)
             agent.request_interrupt()
@@ -418,6 +436,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 agent.request_interrupt()
                 print(f"\n{_ui.GOLD}⚠ skip requested — stopping current task (queue stays live){RESET}")
                 continue
+            pinbox.leave()
             print(f"\n{_ui.GREY}press ctrl+c again or /exit to quit · /skip stops a running task{RESET}")
             try:
                 if not use_chatbox:
@@ -425,6 +444,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else:
                     line = _chatbox.read_line(prompt, on_shift_tab=_on_shift_tab, busy=busy).strip()
             except (EOFError, KeyboardInterrupt):
+                pinbox.leave()
                 print(f"\n{_ui.GREY}bye ✦{RESET}")
                 task_queue.put(None)
                 worker.join(timeout=5)
@@ -474,6 +494,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
                 commands.handle_command(line, agent, enqueue=_enqueue)
             except SystemExit:
+                pinbox.leave()
                 print(f"{_ui.GREY}bye ✦{RESET}")
                 task_queue.put(None)
                 agent.request_interrupt()
