@@ -141,8 +141,8 @@ try {
     $sc = $ws.CreateShortcut($lnk)
     $sc.TargetPath = $jarvisCmd
     $sc.WorkingDirectory = $env:USERPROFILE
-    $sc.Description = "jarvis — claume voice assistant"
-    if (Test-Path $iconSrc) { $sc.IconLocation = $iconSrc }
+    $sc.Description = "jarvis - claume voice assistant"
+    if ($iconSrc -and (Test-Path $iconSrc)) { $sc.IconLocation = $iconSrc }
     $sc.Save()
     Write-Host "[OK] desktop shortcut 'jarvis (claume)' created (arc-reactor icon)" -ForegroundColor Green
 } catch {
