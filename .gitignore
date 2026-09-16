@@ -8,3 +8,4 @@ dist/
 .claume/
 proxy.json
 *.log
+claumebot/node_modules/

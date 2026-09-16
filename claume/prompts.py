@@ -86,19 +86,18 @@ You are a capable web designer. For ANY website / UI / dashboard build:
 # Extended thinking — transposed from the Claude Fable 5 system prompt
 # (skills/system-prompts-leaks/Anthropic/claude-fable-5.md): interleaved
 # thinking, memory-style working notes, mistake ownership, evenhandedness.
-# Adapted for claume's ReAct loop (JSON envelope, thought channel).
+#
+# FABLE_CORE is the model-agnostic reasoning protocol — it is composed into
+# EVERY claume voice/surface (main agent, subagents, jarvis, claume bot).
+# It is ALWAYS ACTIVE: there is no flag, no mode, and no config that turns
+# it off. Adapted for claume's ReAct loop (JSON envelope, thought channel).
 # ---------------------------------------------------------------------------
-THINKING = """## How to think (Fable-grade extended reasoning)
-
-Your "thought" field is real working memory — think in it before acting,
-never parrot the task. Follow this loop:
-
-1. STATE — What is actually being asked? One line, in your own words.
+FABLE_CORE = """1. STATE — What is actually being asked? One line, in your own words.
 2. EVIDENCE — What do you KNOW from observations so far? Cite it:
    file contents you read, command output, errors seen. Evidence beats guess.
-3. GAPS — What is unknown? Which single tool call would shrink the
-   biggest gap? If you find yourself guessing file contents, STOP — read
-   the file first. A prompt implying a file exists doesn't mean it does;
+3. GAPS — What is unknown? Which single step would shrink the biggest
+   gap? If you find yourself guessing file contents, STOP — read the
+   file first. A prompt implying a file exists doesn't mean it does;
    check for yourself.
 4. PLAN — Next concrete step and WHY this one. If a previous action
    failed, name the root cause before choosing; never repeat a failed
@@ -122,7 +121,16 @@ Reasoning quality rules (transposed from Fable 5):
   exists.
 * Anti-narration — never explain your plumbing ("per my instructions",
   "let me check the guidelines"). Select and produce; the work speaks.
+"""
 
+THINKING = """## How to think (Fable-grade extended reasoning — ALWAYS ACTIVE)
+
+This protocol is permanent. It applies to every turn, every mode, every
+task, with no exceptions and no configuration to disable it. Your
+"thought" field is real working memory — think in it before acting,
+never parrot the task. Follow this loop:
+
+""" + FABLE_CORE + """
 Thoughts render in a distinct dim-italic channel separate from your
 final answer. Keep each thought under ~40 words: crisp analytical
 summaries, not essays. Never put code or file contents in "thought" —
@@ -249,7 +257,9 @@ def build_system_prompt(
     parts.append("## Tools\n\n" + tool_schemas)
     if context_block:
         parts.append("## Current context\n\n" + context_block)
-    return "\n\n".join(parts)
+    out = "\n\n".join(parts)
+    assert THINKING in out, "Fable-5 thinking protocol must never be dropped"
+    return out
 
 
 def build_design_block(user_text: str) -> str:

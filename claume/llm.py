@@ -47,16 +47,17 @@ PROVIDER_KEY_ENV: Dict[str, str] = {
 }
 
 
-# tokenin free model pool (all free, ~1–3 req/min each — the fallback
-# chain rotates them automatically on 429 so a turn always survives).
+# tokenin model pool (allowed for shipped keys — leads with claude-fable-5
+# to match claume's always-active Fable-5 reasoning protocol; the chain
+# rotates automatically on 429/5xx so a turn always survives).
 TOKENIN_MODELS = [
-    "myt/glm-5.3-free",
-    "myt/gemini-3.5-flash-free",
-    "myt/MiniMax-M3-free",
-    "myt/qwen3.8-max-free",
-    "myt/grok-4.6-free",
-    "myt/mimo-v2.5-free",
-    "myt/claude-opus-4-8-free",
+    "myt/claude-fable-5",
+    "myt/gpt-5-mini",
+    "myt/claude-haiku-4-5",
+    "myt/glm-5.3-flash",
+    "myt/qwen3.8-flash",
+    "myt/gemini-3.8-flash",
+    "myt/claude-fable-5-1",
 ]
 
 # Provider-scoped fallback chains: applied on top of the primary model so
@@ -99,6 +100,11 @@ def _friendly_http_error(code: int, detail: str) -> str:
         )
     if code == 429:
         return f"rate limited (429): {short} — add another key (NVIDIA_API_KEY_2) or retry"
+    if code == 402 or "saldo" in low or "insufficient_balance" in low:
+        return (
+            f"provider balance empty (402): {short} — top up at tokenin.my.id "
+            "or run /key to switch providers"
+        )
     return f"LLM HTTP {code}: {short}"
 
 

@@ -148,7 +148,7 @@ class TestProvider(_IsolatedHome):
 
         self.assertEqual(llm.PROVIDER_ENDPOINTS["tokenin"], "https://tokenin.my.id/v1")
         self.assertEqual(llm.PROVIDER_KEY_ENV["tokenin"], "TOKENIN_API_KEY")
-        self.assertIn("myt/glm-5.3-free", llm.TOKENIN_MODELS)
+        self.assertIn("myt/claude-fable-5", llm.TOKENIN_MODELS)
 
     def test_default_provider_is_tokenin(self):
         from claume import config
@@ -183,6 +183,57 @@ class TestScreenCapture(_IsolatedHome):
         ip = screen.local_ip()
         parts = ip.split(".")
         self.assertEqual(len(parts), 4)
+
+
+class TestBridge(_IsolatedHome):
+    """Two-way phone bridge: live cast endpoints + file transfer."""
+
+    def test_bridge_end_to_end(self):
+        import json
+        import ssl
+        import urllib.request
+
+        from claume import screen
+
+        out = screen.phone_bridge(port=8811, open_viewer=False)
+        try:
+            self.assertTrue(out["url"])
+            self.assertTrue(out["qr_path"])
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+            def get(path: str):
+                return urllib.request.urlopen(out["url"] + path, context=ctx, timeout=10)
+
+            # page carries the cast UI
+            html = get("/").read().decode()
+            self.assertIn("claume bridge", html)
+            self.assertIn("/stream.mjpeg", html)
+            # file transfer roundtrip
+            req = urllib.request.Request(
+                out["url"] + "/upload?name=t.txt", data=b"x", method="POST"
+            )
+            urllib.request.urlopen(req, context=ctx, timeout=10).read()
+            self.assertEqual(json.load(get("/files")), ["t.txt"])
+            self.assertEqual(get("/download/t.txt").read(), b"x")
+            get("/delete?name=t.txt").read()
+            self.assertEqual(json.load(get("/files")), [])
+            # phone cast intake
+            req = urllib.request.Request(
+                out["url"] + "/phone.frame", data=b"\xff\xd8x", method="POST"
+            )
+            urllib.request.urlopen(req, context=ctx, timeout=10).read()
+            frames = screen._BRIDGE_STATE.get("phone_frames")
+            self.assertIsNotNone(frames)
+            self.assertGreaterEqual(len(frames), 1)
+        finally:
+            screen.bridge_stop()
+
+    def test_bridge_stop_is_idempotent(self):
+        from claume import screen
+
+        screen.bridge_stop()  # must not raise even if never started
 
 
 if __name__ == "__main__":

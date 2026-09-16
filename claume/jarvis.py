@@ -59,7 +59,16 @@ WAKE_WORD_DEFAULT = "jarvis"
 
 
 def voice_system_prompt() -> str:
-    return VOICE_SYSTEM_EXTRA.format(version=__version__)
+    # Fable-5 reasoning is ALWAYS ACTIVE on every claume surface — the
+    # voice loop composes the same core protocol the main agent uses.
+    from . import prompts
+
+    fable = ""
+    try:
+        fable = "In your reasoning, follow this permanent protocol:\n\n" + prompts.FABLE_CORE
+    except Exception:
+        fable = ""
+    return VOICE_SYSTEM_EXTRA.format(version=__version__) + ("\n" + fable if fable else "")
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,16 @@
+{
+  "name": "claumebot",
+  "productName": "claume bot",
+  "version": "3.2.0",
+  "description": "claume bot — the claume desktop companion: point-cloud humanoid avatar, live camera vision, real STT/TTS, master profile",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}

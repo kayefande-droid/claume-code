@@ -71,6 +71,7 @@ HELP_LINES = [
     f"  {MINT}/plugins{RESET}          list plugins — integrations & machinery (vs skills)",
     f"  {MINT}/plugin-on|off{RESET} <name>  activate/deactivate a plugin (graphify, jarvis)",
     f"  {MINT}/jarvis{RESET}           launch the jarvis desktop voice assistant (or /jarvis cli)",
+    f"  {MINT}/jarvis bot{RESET}       launch claume bot — the humanoid 3D desktop app",
     f"  {MINT}/graphify{RESET} [path]  build a knowledge graph from a folder (plugin)",
     f"  {MINT}/memory{RESET} [list]     persistent memory: /memory save <name> <fact> · read · forget",
     f"  {MINT}/look{RESET} [question]   claume SEES your screen: screenshot + vision analysis of errors",
@@ -502,6 +503,11 @@ def cmd_jarvis(args: List[str]) -> None:
         r = sp.run([sys.executable, str(script)], capture_output=True, text=True)
         print(f"{GREEN}✔ {r.stdout.strip() or 'icon regenerated'}{RESET}")
         return
+    if args and args[0] == "bot":
+        # claume bot — the Electron desktop app (point-cloud humanoid avatar,
+        # live camera, real STT/TTS through the same claume provider/key)
+        _launch_claumebot()
+        return
     try:
         from .jarvis_app import JarvisApp
     except Exception as exc:
@@ -520,6 +526,39 @@ def cmd_jarvis(args: List[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+def _launch_claumebot() -> None:
+    """Launch the claume bot Electron desktop app (detached from the REPL)."""
+    import shutil
+    import subprocess as sp
+
+    # 1) packaged app dir shipped with claume, 2) repo checkout next to claume/
+    candidates = [
+        Path(__file__).resolve().parent / "claumebot",
+        Path(__file__).resolve().parent.parent / "claumebot",
+    ]
+    app_dir = next((c for c in candidates if (c / "package.json").exists()), None)
+    if not app_dir:
+        print(f"{RED}✗ claumebot app not found (expected claumebot/ next to the claume package){RESET}")
+        return
+    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    if not npm:
+        print(f"{RED}✗ npm not found — install Node.js to run claume bot{RESET}")
+        return
+    has_node_modules = (app_dir / "node_modules").exists()
+    print(f"{GREEN}● claume bot{RESET} {GREY}launching the humanoid desktop companion…{RESET}")
+    cmd = [npm, "start"] if has_node_modules else [npm, "install", "--no-audit", "--no-fund"]
+    try:
+        if not has_node_modules:
+            print(f"{GREY}  first run: installing electron (~1 min, one time){RESET}")
+            sp.run(cmd, cwd=str(app_dir), check=True, shell=(os.name == "nt"))
+            cmd = [npm, "start"]
+        sp.Popen(cmd, cwd=str(app_dir), shell=(os.name == "nt"))
+    except Exception as exc:
+        print(f"{RED}✗ claume bot failed to start: {exc}{RESET}")
+        return
+    print(f"{GREY}  the REPL stays live — the bot runs in its own window{RESET}")
+
+
 # Screen vision — /look · /bridge (offline phone bridge with QR)
 # ---------------------------------------------------------------------------
 def cmd_look(args: List[str]) -> None:
@@ -546,18 +585,25 @@ def cmd_bridge(args: List[str]) -> None:
     port = int(args[0]) if args and args[0].isdigit() else 8765
     out = screenmod.phone_bridge(port=port)
     print(f"{GREEN}● phone bridge{RESET} {GREY}live at{RESET} {MINT}{out['url']}{RESET}")
-    print(f"{GREY}  works over LAN or Bluetooth PAN — phone needs NO internet{RESET}")
+    scheme = "HTTPS (cast-enabled)" if out.get("https") else "HTTP"
+    print(f"{GREY}  {scheme} · LAN / Bluetooth PAN — phone needs NO internet{RESET}")
     if out.get("qr_path"):
-        print(f"{ACCENT}  QR: {out['qr_path']}{RESET} {GREY}— open it, scan with your phone camera{RESET}")
+        print(f"{ACCENT}  QR: {out['qr_path']}{RESET} {GREY}— scan with your phone camera{RESET}")
         try:
             import os as _os
 
             _os.startfile(out["qr_path"])  # pop the QR image on screen
         except Exception:
             pass
-    if out.get("screenshot"):
-        print(f"{GREY}  live screen: {out['screenshot']}{RESET}")
-    print(f"{GREY}  phone controls: refresh screen · diagnose (vision fix suggestions){RESET}")
+    if out.get("https"):
+        print(f"{GREY}  on the phone page:{RESET}")
+        print(f"{GREY}    ▶ cast PC screen (live MJPEG) → your phone{RESET}")
+        print(f"{GREY}    🎥 cast phone camera / 🖥 phone screen → PC viewer window{RESET}")
+        print(f"{GREY}    ⬆⬇ two-way file transfer (upload / download / delete){RESET}")
+        print(f"{GREY}  first open shows a certificate warning — tap through (self-signed){RESET}")
+    else:
+        print(f"{GREY}  phone page: live PC screen cast + two-way file transfer{RESET}")
+        print(f"{GREY}  phone→PC casting needs HTTPS: pip install cryptography, rerun /bridge{RESET}")
 
 
 # ---------------------------------------------------------------------------

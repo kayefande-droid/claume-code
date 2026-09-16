@@ -326,6 +326,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             skillsmod.set_plugin_active("jarvis", True)
         except Exception:
             pass
+        if "bot" in argv[1:]:
+            # claume bot — the Electron desktop companion app
+            from .commands import _launch_claumebot
+
+            _launch_claumebot()
+            return 0
         from .jarvis_app import JarvisApp
 
         app = JarvisApp()

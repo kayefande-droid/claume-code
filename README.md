@@ -9,21 +9,20 @@
  ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝
 ```
 
-**claume-code v3.1** is a pixel-animated **desktop CLI coding agent** by
+**claume-code v3.2** is a pixel-animated **desktop CLI coding agent** by
 **kayefande-droid** (not a web app) that builds full projects from
 natural-language prompts — inspired by Claude Code, powered by a **free
 model pool** (tokenin by default, key built in — NVIDIA NIM also supported
 through the **free-claume proxy**). claume always identifies as
 **claume** — never Claude, never ChatGPT.
 
-**v3 highlights:** 🧠 **Fable-grade thinking + persistent memory** (transposed
-from the leaked Claude Fable 5 prompts) · 🔌 **plugins vs skills, properly
-differentiated** (PLUGINS.md / SKILLS.md) · 🎙 **jarvis** — a desktop voice
-assistant with wake word, human-like animated UI and its own app icon
-· 👁 **screen vision** — claume and jarvis SEE your screen and fix what they
-see · 📱 **offline phone bridge** — QR code links your phone over
-LAN/Bluetooth PAN, no internet needed · 🔑 **tokenin provider built in**
-(free community pool, zero setup)
+**v3.2 highlights:** 🤖 **claume bot** — a full Electron desktop companion:
+3D point-cloud humanoid avatar (Three.js plexus + GLSL drift), live camera
+vision, real STT/TTS, knows its master by name · 📱 **two-way phone
+bridge** — live screen cast PC↔phone over QR/LAN/Bluetooth PAN, plus
+file transfer, zero internet · 🧠 **Fable-5 reasoning ALWAYS ACTIVE** on
+every surface (agent, subagents, jarvis, bot) · 🎙 **jarvis** wake-word
+assistant · 👁 **screen vision** · 🔑 **tokenin provider built in**
 
 > a **kayefande-droid** product — designed, built and maintained by
 > [github.com/kayefande-droid](https://github.com/kayefande-droid)
@@ -212,8 +211,8 @@ Switch anytime: Shift+Tab (in-terminal) or `/mode <name>`.
 | `/plugins` · `/plugin-on/off <name>` | **plugins** — integrations & machinery (graphify, jarvis), distinct from skills |
 | `/memory [list]` · `/memory save <name> <fact>` | persistent memory (Fable-style recall across sessions) |
 | `/look [question]` | **screen vision** — screenshot + analysis of visible errors |
-| `/bridge [port]` | **offline phone bridge** — QR over LAN/Bluetooth PAN, no internet |
-| `/jarvis [cli\|icon]` | launch the jarvis desktop voice assistant |
+| `/bridge [port]` | **offline phone bridge** — two-way live cast + file transfer over QR/LAN/BT PAN, no internet |
+| `/jarvis [cli\|icon\|bot]` | launch the jarvis assistant · `bot` = the claume bot Electron app |
 | `/proxy` | start/reuse the free-claume proxy |
 | `/proxy-ui` | claume studio dashboard in your browser |
 | `/keys` · `/key NAME` · `/key-del NAME` | manage the local key vault ("live space") |
@@ -250,19 +249,62 @@ and edits the code. Capture uses `mss` when installed, else PowerShell
 System.Drawing (zero required deps). Screenshots live in
 `~/.claume/screens/` (rolling last 8).
 
-## Offline phone bridge — your phone, no internet (v3.1)
+## Offline phone bridge — two-way live cast + files, no internet (v3.2)
 
 ```
 /bridge            ← starts the bridge and pops a QR code on screen
+/bridge 8900       ← custom port
 ```
 
 Scan the QR with any phone camera: the phone's browser connects to the
 computer **over the local network — Wi-Fi hotspot or Bluetooth PAN — with
-zero internet required**. The page shows the live screen (auto-refresh)
-and a **diagnose** button that runs the same vision analysis claume uses,
-so you can point at problems from your phone. The QR encoder is built in
-(pure stdlib, Reed–Solomon error correction, verified against reference
-decoders); the URL is short enough for the lowest error-correction level.
+zero internet required**. It works like Phone Link, wirelessly, in both
+directions:
+
+* **▶ PC → phone live cast** — your computer screen streams to the phone
+  as a live MJPEG video (not just a screenshot — it moves in real time).
+* **🎥/🖥 phone → PC live cast** — from the same page, cast your phone's
+  **camera** or the **phone's own screen** back to a live viewer window on
+  the PC. Uses a self-signed HTTPS endpoint (auto-generated when the
+  `cryptography` package is installed — `pip install cryptography`; the
+  first phone open shows a one-tap certificate warning).
+* **⬆⬇ two-way file transfer** — send files phone → PC and download/delete
+  them PC-side from the same page; uploads land in `~/.claume/bridge_inbox/`.
+* **🔍 diagnose** — runs claume's vision analysis on the PC screen so you
+  can point at problems from your phone.
+
+The QR encoder is built in (pure stdlib, Reed–Solomon error correction,
+verified against reference decoders). No cloud, no accounts, no internet.
+
+## claume bot — the humanoid desktop companion app (v3.2)
+
+A full **Electron desktop app** (not a terminal window): a living 3D
+point-cloud humanoid head built with Three.js — sparse grains (~20%
+density) connected by a thin plexus wireframe, drifting under a custom
+GLSL vertex shader, glowing cyan on dark. It listens, watches and talks:
+
+* **Camera vision** — your webcam feed sits in the corner; the bot sees
+  you (and your screen, on demand) and reasons about what it sees.
+* **Real voice both ways** — wake words "claume"/"jarvis" (always-on
+  listening), mic capture → free Google STT through the bridge, and
+  spoken replies via SAPI5/pyttsx3 neural voices with a Web-Speech
+  accent picker as fallback.
+* **Knows its master** — on first contact it asks your name and stores it
+  in `~/.claume/master.json`; every session after that, it greets you by
+  name and remembers.
+* **Same brain as claume** — replies flow through YOUR provider/key via
+  the bundled Python bridge (`claumebot_server.py`), with the same
+  always-active Fable-5 reasoning protocol as the main agent.
+* **Glassmorphic dashboard** — system matrix sidebar, reasoning
+  step-stream console, output feed, frameless dark UI.
+
+Launch it:
+
+```
+claume jarvis bot        ← from anywhere (first run installs electron)
+/jarvis bot              ← from inside the claume REPL
+cd claumebot && npm start ← from the repo
+```
 
 ## jarvis — the desktop voice assistant plugin (v3)
 
@@ -273,6 +315,7 @@ stack. It has its own app icon and desktop shortcut (created by
 ```
 /jarvis              ← animated desktop window from inside claume
 /jarvis cli          ← in-terminal wake-word loop
+/jarvis bot          ← claume bot, the Electron humanoid app (see above)
 jarvis               ← its own command (claude-style shortcut, works anywhere)
 ```
 

@@ -453,9 +453,17 @@ def qr_png(text: str, scale: int = 8, quiet: int = 3) -> bytes:
         + chunk(b"IEND", b"")
     )
 
-
 # ---------------------------------------------------------------------------
-# Offline phone bridge — LAN/BT-PAN HTTP server + QR
+# Offline phone bridge — LAN/BT-PAN HTTP(S) server + QR
+#
+# Two-way live cast + file transfer ("phone link" style) over the local
+# network or a Bluetooth PAN pairing — NO internet needed:
+#   PC    -> phone : /stream.mjpeg live screen cast (plain HTTP, any browser)
+#   phone -> PC    : camera/screen cast via /phone.frame POST (needs HTTPS
+#                    for getUserMedia/getDisplayMedia — shown when a cert
+#                    exists) rendered in the PC-side tkinter viewer
+#   files both ways: /files listing, /download/<name>, POST /upload,
+#                    /delete — a two-way AirDrop-style exchange
 # ---------------------------------------------------------------------------
 def local_ip() -> str:
     """Best-effort host LAN address (works offline once an interface is up)."""
@@ -469,74 +477,327 @@ def local_ip() -> str:
         s.close()
 
 
-_BRIDGE_STATE: Dict[str, Any] = {"server": None, "port": 0, "shot": None, "thread": None}
+_BRIDGE_STATE: Dict[str, Any] = {
+    "server": None,
+    "port": 0,
+    "shot": None,
+    "thread": None,
+    "live": False,           # PC->phone MJPEG casting toggle
+    "phone_frames": None,    # deque of jpeg bytes from the phone cast
+    "viewer": None,          # PC-side tkinter viewer root (or None)
+    "https": False,
+}
 
 
-def _bridge_page(ip: str, port: int) -> bytes:
-    shot = _BRIDGE_STATE.get("shot")
-    img_tag = (
-        f'<img id="s" src="screen.png?{int(time.time())}" style="max-width:100%;border-radius:12px">'
-        if shot else "<p>No screenshot yet — run /look on the computer.</p>"
+def _bridge_frame_jpeg(max_w: int = 1100) -> bytes:
+    """One fresh screen frame as JPEG. mss+Pillow when installed, else the
+    slower GDI PNG bytes (browsers render PNG inside MJPEG poorly, but the
+    fallback still streams — Pillow makes it a true JPEG)."""
+    try:
+        import io as _io
+
+        import mss  # type: ignore
+        from PIL import Image  # type: ignore
+
+        with mss.mss() as sct:
+            mon = sct.monitors[1]
+            shot = sct.grab(mon)
+        img = Image.frombytes("RGB", shot.size, shot.rgb)
+        if img.width > max_w:
+            img = img.resize((max_w, int(img.height * max_w / img.width)))
+        buf = _io.BytesIO()
+        img.save(buf, "JPEG", quality=62)
+        return buf.getvalue()
+    except Exception:
+        return _capture_windows_gdi()
+
+
+def _bridge_page(ip: str, port: int, https: bool = False) -> bytes:
+    scheme = "https" if https else "http"
+    secure_block = (
+        "<div id='sec' style='display:none'>"
+        "<button id='camBtn' class='sec'>&#127909; cast my camera to the PC</button>"
+        "<button id='scrBtn' class='sec'>&#128421; cast my phone screen to the PC</button>"
+        "<video id='v' autoplay playsinline muted style='max-width:100%;border-radius:12px'></video>"
+        "</div>"
+        if https
+        else "<p class='muted'>&#128274; phone->PC casting needs HTTPS; add "
+        "'cryptography' (pip install cryptography) and restart the bridge to enable it.</p>"
     )
     return (
         "<!doctype html><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>claume phone bridge</title>"
+        f"<title>claume bridge &middot; {ip}:{port}</title>"
         "<style>body{background:#0a0e14;color:#c8d3de;font-family:system-ui;margin:0;padding:16px}"
-        "h1{font-size:18px}button{background:#22d3ee;border:0;border-radius:10px;padding:10px 14px;"
-        "margin:4px;font-weight:600}pre{background:#0f1520;padding:10px;border-radius:8px;"
-        "white-space:pre-wrap;font-size:11px}</style>"
-        "<h1>◆ claume phone bridge</h1>"
-        f"<p>offline link · {ip}:{port} · refreshes live</p>"
-        "<button onclick='location.reload()'>↻ refresh screen</button>"
-        "<button onclick=\"fetch('/analyze').then(r=>r.text()).then(t=>alert(t))\">🔍 diagnose screen</button>"
-        f"{img_tag}"
-        "<p style='color:#5c6b7a'>paired over LAN / Bluetooth PAN — claume needs no internet for this.</p>"
+        "h1{font-size:18px;margin:4px 0}button{background:#22d3ee;color:#04202a;border:0;border-radius:10px;"
+        "padding:11px 16px;margin:4px 4px 4px 0;font-weight:700;font-size:14px}"
+        "button.sec{background:#134e4a;color:#7df3ff}"
+        "input{font-size:14px;padding:8px;border-radius:8px;border:1px solid #2a3644;"
+        "background:#0f1520;color:#c8d3de}"
+        "img,video{max-width:100%;border-radius:12px;margin-top:10px}"
+        "li{margin:4px 0}a{color:#22d3ee}.muted{color:#5c6b7a;font-size:12px}</style>"
+        "<h1>&#9670; claume bridge</h1>"
+        f"<p class='muted'>{scheme} &middot; {ip}:{port} &middot; offline LAN/BT-PAN link</p>"
+        "<button onclick=\"document.getElementById('pc').src='/stream.mjpeg'\">&#9654; cast PC screen (live)</button>"
+        "<button onclick=\"document.getElementById('pc').src=''\">&#9632; stop</button>"
+        "<img id='pc' alt='PC screen cast appears here'>"
+        + secure_block +
+        "<h2 style='font-size:15px'>Files</h2>"
+        "<input type='file' id='f' multiple> <button onclick='up()'>&#11014; send to PC</button>"
+        "<div id='msg' class='muted'></div>"
+        "<ul id='list'></ul>"
+        "<script>"
+        "async function up(){const fl=document.getElementById('f').files;"
+        "const m=document.getElementById('msg');"
+        "if(!fl.length){m.textContent='pick files first';return}"
+        "for(const file of fl){m.textContent='sending '+file.name+'...';"
+        "await fetch('/upload?name='+encodeURIComponent(file.name),"
+        "{method:'POST',body:await file.arrayBuffer()});}"
+        "m.textContent='sent OK';location.reload()}"
+        "fetch('/files').then(r=>r.json()).then(l=>{"
+        "document.getElementById('list').innerHTML=l.map(n=>"
+        "\"<li><a href='/download/\"+encodeURIComponent(n)+\"'>&#11015; \"+n+\"</a> \"+"
+        "\"<a style='color:#f87171' href='#' onclick=\\\"del('\"+encodeURIComponent(n)+\"')\\\">del</a></li>\")"
+        ".join('')});"
+        "function del(n){fetch('/delete?name='+n).then(()=>location.reload())}"
+        "if(location.protocol==='https:'){"
+        "document.getElementById('sec').style.display='block';"
+        "const v=document.getElementById('v');"
+        "const grab=async g=>{const s=await g();v.srcObject=s;post(s)};"
+        "document.getElementById('camBtn').onclick=()=>"
+        "grab(()=>navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}));"
+        "document.getElementById('scrBtn').onclick=()=>"
+        "grab(()=>navigator.mediaDevices.getDisplayMedia({video:true}));"
+        "function post(s){const tc=document.createElement('canvas');"
+        "const ctx=tc.getContext('2d');let busy=false;"
+        "s.getVideoTracks()[0].onended=()=>{fetch('/phone.stop');v.srcObject=null};"
+        "setInterval(async()=>{if(busy||!v.videoWidth)return;busy=true;"
+        "tc.width=640;tc.height=Math.round(640*v.videoHeight/v.videoWidth);"
+        "ctx.drawImage(v,0,0,tc.width,tc.height);"
+        "tc.toBlob(async b=>{if(b)await fetch('/phone.frame',{method:'POST',body:b});"
+        "busy=false},'image/jpeg',0.6)},250)}}"
+        "</script>"
     ).encode("utf-8")
 
 
-def phone_bridge(port: int = 8765, duration: float = 0.0) -> Dict[str, Any]:
-    """Start the offline phone bridge: capture a screen, serve it on LAN,
-    return the QR (png path) + URL. duration>0 auto-stops after N seconds
-    (0 = runs until process exit / bridge_stop)."""
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+def _bridge_inbox() -> Path:
+    d = config.claume_dir() / "bridge_inbox"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _start_phone_viewer() -> None:
+    """PC-side tkinter viewer for the phone cast (stdlib; Pillow optional)."""
+    if _BRIDGE_STATE.get("viewer"):
+        return
+    try:
+        import tkinter as tk
+    except Exception:
+        return
+
+    root = tk.Tk()
+    root.title("claume bridge - phone cast")
+    root.configure(bg="#0a0e14")
+    root.geometry("720x560")
+    lbl = tk.Label(root, bg="#0a0e14", fg="#22d3ee",
+                   text="waiting for the phone cast...", font=("Consolas", 11))
+    lbl.pack(expand=True, fill="both")
+
+    def poll() -> None:
+        frames = _BRIDGE_STATE.get("phone_frames")
+        fr = frames[-1] if frames else None
+        if fr:
+            try:
+                from PIL import Image, ImageTk  # type: ignore
+
+                img = Image.open(io.BytesIO(fr))
+                w, h = img.size
+                maxw = max(root.winfo_width() - 20, 200)
+                if w > maxw:
+                    img = img.resize((maxw, int(h * maxw / w)))
+                photo = ImageTk.PhotoImage(img)
+                lbl.configure(image=photo, text="")
+                lbl.image = photo  # hold a reference
+            except Exception:
+                lbl.configure(text="phone casting... (install Pillow for video)")
+        root.after(120, poll)
+
+    def close() -> None:
+        _BRIDGE_STATE["viewer"] = None
+        root.destroy()
+
+    poll()
+    root.protocol("WM_DELETE_WINDOW", close)
+    _BRIDGE_STATE["viewer"] = root
+    threading.Thread(target=root.mainloop, daemon=True).start()
+
+
+def phone_bridge(port: int = 8765, duration: float = 0.0, open_viewer: bool = True) -> Dict[str, Any]:
+    """Start the offline two-way phone bridge (live cast both ways + file
+    transfer). Returns {url, qr_path, ip, port, https, screenshot}.
+    duration>0 auto-stops after N seconds (0 = until bridge_stop/exit)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     shot = capture()
     _BRIDGE_STATE["shot"] = shot
+    import collections
+
+    frames = collections.deque(maxlen=3)
+    _BRIDGE_STATE["phone_frames"] = frames
+    _BRIDGE_STATE["live"] = False
+    inbox = _bridge_inbox()
 
     class H(BaseHTTPRequestHandler):
-        def log_message(self, *a: Any) -> None:  # silence
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a: Any) -> None:
             return
 
-        def do_GET(self) -> None:
+        def _hdrs(self, typ: str, length: int = -1, cache: str = "no-store") -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", typ)
+            if length >= 0:
+                self.send_header("Content-Length", str(length))
+            self.send_header("Cache-Control", cache)
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802
             p = urllib.parse.urlparse(self.path).path
             if p == "/screen.png":
                 data = (_BRIDGE_STATE.get("shot") or {}).get("path", "")
                 body = open(data, "rb").read() if data else b"no screenshot"
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.end_headers()
+                self._hdrs("image/png", len(body))
                 self.wfile.write(body)
-            elif p == "/analyze":
-                analysis, err = look_and_analyze()
-                _BRIDGE_STATE["shot"] = capture()  # refresh
-                body = analysis.encode("utf-8")
+            elif p == "/stream.mjpeg":
+                # LIVE PC -> phone screen cast (multipart JPEG)
+                _BRIDGE_STATE["live"] = True
                 self.send_response(200)
-                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Type",
+                                 "multipart/x-mixed-replace; boundary=frame")
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
+                try:
+                    while _BRIDGE_STATE["live"]:
+                        jpg = _bridge_frame_jpeg()
+                        if not jpg:
+                            break
+                        self.wfile.write(
+                            b"--frame\r\nContent-Type: image/jpeg\r\n"
+                            + b"Content-Length: " + str(len(jpg)).encode()
+                            + b"\r\n\r\n" + jpg + b"\r\n"
+                        )
+                        time.sleep(0.18)
+                except Exception:
+                    pass
+                finally:
+                    _BRIDGE_STATE["live"] = False
+            elif p == "/files":
+                names = sorted(x.name for x in inbox.iterdir() if x.is_file())
+                body = json.dumps(names).encode()
+                self._hdrs("application/json", len(body))
                 self.wfile.write(body)
+            elif p.startswith("/download/"):
+                name = Path(urllib.parse.unquote(p[len("/download/"):])).name
+                f = inbox / name
+                if f.is_file():
+                    body = f.read_bytes()
+                    self._hdrs("application/octet-stream", len(body), "")
+                    self.wfile.write(body)
+                else:
+                    self.send_error(404)
+            elif p == "/delete":
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                name = Path(urllib.parse.unquote(q.get("name", [""])[0])).name
+                (inbox / name).unlink(missing_ok=True)
+                self._hdrs("text/plain", 2)
+                self.wfile.write(b"ok")
+            elif p == "/phone.stop":
+                frames.clear()
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            elif p == "/qr.png":
+                png = qr_png(f"http://{local_ip()}:{_BRIDGE_STATE['port']}", scale=6)
+                self._hdrs("image/png", len(png))
+                self.wfile.write(png)
             else:
-                body = _bridge_page(local_ip(), port)
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.end_headers()
+                body = _bridge_page(local_ip(), _BRIDGE_STATE["port"], _BRIDGE_STATE["https"])
+                self._hdrs("text/html", len(body))
                 self.wfile.write(body)
 
+        def do_POST(self) -> None:  # noqa: N802
+            p = urllib.parse.urlparse(self.path).path
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+            if p == "/upload":
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                name = Path(urllib.parse.unquote(q.get("name", ["file"])[0])).name
+                (inbox / name).write_bytes(body)
+                self._hdrs("text/plain", 2)
+                self.wfile.write(b"ok")
+            elif p == "/phone.frame":
+                frames.append(body)
+                if open_viewer:
+                    _start_phone_viewer()
+                self._hdrs("text/plain", 2)
+                self.wfile.write(b"ok")
+            else:
+                self.send_error(404)
+
     ip = local_ip()
-    url = f"http://{ip}:{port}"
-    server = HTTPServer((ip, port), H)
+    server = ThreadingHTTPServer((ip, port), H)
     _BRIDGE_STATE["server"] = server
     _BRIDGE_STATE["port"] = port
+
+    # HTTPS upgrade (self-signed) so the phone page can use getUserMedia /
+    # getDisplayMedia for phone->PC casting. Optional dependency.
+    https = False
+    try:
+        import datetime as _dt
+        from ipaddress import ip_address
+
+        from cryptography import x509  # type: ignore
+        from cryptography.hazmat.primitives import hashes, serialization  # type: ignore
+        from cryptography.hazmat.primitives.asymmetric import rsa  # type: ignore
+        from cryptography.x509.oid import NameOID  # type: ignore
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "claume-bridge")])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(subject)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(_dt.datetime.now(_dt.timezone.utc))
+            .not_valid_after(_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=365))
+            .add_extension(
+                x509.SubjectAlternativeName([x509.DNSName(ip), x509.IPAddress(ip_address(ip))]),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
+        )
+        cert_dir = config.claume_dir() / "certs"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        key_pem = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+        (cert_dir / "bridge-key.pem").write_bytes(key_pem)
+        (cert_dir / "bridge-cert.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        import ssl as _ssl
+
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(str(cert_dir / "bridge-cert.pem"), str(cert_dir / "bridge-key.pem"))
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        https = True
+    except Exception:
+        https = False
+
+    _BRIDGE_STATE["https"] = https
+    scheme = "https" if https else "http"
+    url = f"{scheme}://{ip}:{port}"
 
     def serve() -> None:
         try:
@@ -558,7 +819,7 @@ def phone_bridge(port: int = 8765, duration: float = 0.0) -> Dict[str, Any]:
         pass
 
     out = {"url": url, "qr_path": qr_path, "screenshot": shot.get("path", ""),
-           "ip": ip, "port": port, "engine": shot.get("engine", "")}
+           "ip": ip, "port": port, "engine": shot.get("engine", ""), "https": https}
     if duration > 0:
         def stopper() -> None:
             time.sleep(duration)
@@ -568,6 +829,7 @@ def phone_bridge(port: int = 8765, duration: float = 0.0) -> Dict[str, Any]:
 
 
 def bridge_stop() -> None:
+    _BRIDGE_STATE["live"] = False
     srv = _BRIDGE_STATE.get("server")
     if srv:
         try:
@@ -575,3 +837,13 @@ def bridge_stop() -> None:
         except Exception:
             pass
         _BRIDGE_STATE["server"] = None
+    frames = _BRIDGE_STATE.get("phone_frames")
+    if frames is not None:
+        frames.clear()
+    v = _BRIDGE_STATE.get("viewer")
+    if v:
+        try:
+            v.after(0, v.destroy)
+        except Exception:
+            pass
+        _BRIDGE_STATE["viewer"] = None

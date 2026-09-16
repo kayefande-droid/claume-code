@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>claume bot // NATIVE APPARATUS</title>
+  <style>
+    :root {
+      --bg: #030712; --panel: rgba(15, 23, 42, 0.45); --line: rgba(255,255,255,0.05);
+      --cyan: #22d3ee; --cyan-dim: rgba(34,211,238,0.25); --purple: #a855f7;
+      --zinc-100: #f4f4f5; --zinc-200: #e4e4e7; --zinc-300: #d4d4d8; --zinc-400: #a1a1aa;
+      --zinc-500: #71717a; --zinc-600: #52525b; --zinc-700: #3f3f46; --zinc-900: #18181b;
+      --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg); overflow: hidden; color: var(--zinc-400);
+      font-family: var(--mono); user-select: none;
+    }
+    .glass-panel {
+      background: var(--panel); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--line); border-radius: 12px;
+    }
+    .accent-cyan { color: var(--cyan); }
+    .label { font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--zinc-500); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+    /* ---------- titlebar ---------- */
+    #titlebar {
+      -webkit-app-region: drag; display: flex; align-items: center; gap: 8px;
+      padding: 0 12px; height: 40px; border-bottom: 1px solid var(--line);
+      background: rgba(3,7,18,0.7); position: relative; z-index: 30;
+    }
+    #titlebar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); animation: pulse 2.2s infinite; }
+    #titlebar .brand { font-weight: 700; letter-spacing: .2em; font-size: 11px; color: var(--zinc-100); }
+    #titlebar .ver { font-size: 9px; color: var(--cyan); border: 1px solid var(--cyan-dim); padding: 2px 6px; border-radius: 4px; font-weight: 700; }
+    #titlebar .spacer { flex: 1; }
+    #titlebar button {
+      -webkit-app-region: no-drag; width: 34px; height: 26px; border: 0; background: transparent;
+      color: var(--zinc-500); font-size: 13px; cursor: pointer; border-radius: 6px;
+    }
+    #titlebar button:hover { background: rgba(255,255,255,0.06); color: var(--zinc-200); }
+    #titlebar button.close:hover { background: rgba(248,113,113,0.15); color: #f87171; }
+
+    /* ---------- shell ---------- */
+    #shell { display: flex; width: 100vw; height: calc(100vh - 40px); }
+
+    /* ---------- sidebar ---------- */
+    #sidebar {
+      width: 290px; min-width: 290px; display: flex; flex-direction: column;
+      border-right: 1px solid var(--line); background: rgba(15,23,42,0.35); backdrop-filter: blur(16px);
+    }
+    .side-section { padding: 16px 20px; border-bottom: 1px solid rgba(24,24,27,0.5); }
+    .side-scroll { flex: 1; overflow-y: auto; }
+    .side-scroll::-webkit-scrollbar { width: 8px; }
+    .side-scroll::-webkit-scrollbar-thumb { background: var(--zinc-900); border-radius: 4px; }
+    .side-foot { padding: 12px; border-top: 1px solid rgba(24,24,27,0.5); font-size: 9px; color: var(--zinc-600); text-align: center; letter-spacing: .14em; text-transform: uppercase; }
+    .card { background: rgba(0,0,0,0.4); border: 1px solid var(--zinc-900); border-radius: 8px; padding: 12px; }
+    .card p { font-size: 12px; color: var(--zinc-300); }
+    .card .sub { font-size: 11px; color: var(--zinc-500); margin-top: 4px; line-height: 1.5; }
+    .node-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 10px; border: 1px solid var(--zinc-900); background: rgba(24,24,27,0.3); border-radius: 8px; margin-bottom: 6px; font-size: 12px; color: var(--zinc-400); }
+    .node-row b { color: var(--ok); font-size: 10px; letter-spacing: .08em; }
+    .node-row b.ready { color: var(--cyan); }
+    .node-row b.off { color: var(--err); }
+    .chip { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--zinc-700); color: var(--zinc-500); }
+    .chip.err { color: var(--err); border-color: rgba(248,113,113,.3); }
+
+    /* ---------- stage ---------- */
+    #stage { flex: 1; position: relative; display: flex; flex-direction: column; overflow: hidden;
+      background: radial-gradient(1200px 700px at 50% 35%, #071021 0%, #030712 60%); }
+    #avatarWrap { position: absolute; inset: 0; }
+    #avatar { width: 100%; height: 100%; display: block; }
+    #statusStrip { position: absolute; top: 16px; left: 22px; z-index: 6; display: flex; gap: 12px; align-items: center; font-size: 10px; letter-spacing: .16em; color: var(--zinc-500); }
+    #stateChip { padding: 4px 10px; border: 1px solid var(--cyan-dim); border-radius: 999px; color: var(--cyan); font-weight: 700; font-size: 10px; letter-spacing: .18em; background: rgba(34,211,238,0.06); }
+    #stateChip.listening { color: var(--ok); border-color: rgba(52,211,153,.3); background: rgba(52,211,153,.06); }
+    #stateChip.speaking { color: var(--warn); border-color: rgba(251,191,36,.3); background: rgba(251,191,36,.06); }
+    #camPeek {
+      position: absolute; right: 18px; top: 16px; width: 208px; aspect-ratio: 16/9; border-radius: 12px;
+      border: 1px solid var(--line); overflow: hidden; background: #000; z-index: 5;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    }
+    #camPeek video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    #camPeek .cam-label { position: absolute; left: 8px; bottom: 6px; font-size: 9px; letter-spacing: .14em; color: var(--cyan); background: rgba(0,0,0,0.55); padding: 2px 6px; border-radius: 4px; font-weight: 700; }
+    #camPeek .cam-off { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--zinc-600); letter-spacing: .12em; }
+
+    /* ---------- dock ---------- */
+    #dock { position: relative; z-index: 10; margin: auto auto 24px; width: min(880px, 90%); display: flex; flex-direction: column; gap: 10px; }
+    #thinkingConsole { border-left: 2px solid var(--purple); background: rgba(168,85,247,0.03); border-radius: 12px; padding: 12px 16px; display: none; }
+    #thinkingConsole.on { display: block; }
+    #thinkingConsole .tt { color: var(--purple); font-size: 9px; font-weight: 700; letter-spacing: .18em; margin-bottom: 6px; }
+    #thinkingLog { color: var(--zinc-500); font-size: 11px; font-style: italic; line-height: 1.6; }
+    #outBox { padding: 16px 18px; }
+    #outBox .label { color: var(--cyan); margin-bottom: 6px; }
+    #terminalOutput { color: var(--zinc-200); font-size: 13.5px; line-height: 1.75; min-height: 20px; }
+    #terminalOutput .err { color: var(--err); }
+    #inputBar { display: flex; gap: 8px; padding: 8px; align-items: center; }
+    #commandInputField {
+      flex: 1; background: transparent; border: 0; outline: none; color: var(--zinc-100);
+      font-family: var(--mono); font-size: 13px; padding: 8px 10px;
+    }
+    #commandInputField::placeholder { color: var(--zinc-700); }
+    .btn {
+      border: 1px solid rgba(34,211,238,0.35); background: rgba(8,51,68,0.4); color: var(--cyan);
+      font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .12em;
+      padding: 9px 14px; border-radius: 9px; cursor: pointer; transition: all .15s; white-space: nowrap;
+    }
+    .btn:hover { background: rgba(8,51,68,0.7); }
+    .btn:disabled { opacity: .4; cursor: default; }
+    .btn.ghost { border-color: var(--zinc-700); background: transparent; color: var(--zinc-400); }
+    .btn.ghost:hover { color: var(--zinc-200); background: rgba(255,255,255,0.04); }
+    .btn.mic-on { color: var(--ok); border-color: rgba(52,211,153,.4); background: rgba(6,60,45,0.35); animation: pulse 1.6s infinite; }
+
+    /* ---------- onboarding overlay ---------- */
+    #onboard {
+      position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center;
+      background: rgba(3,7,18,0.82); backdrop-filter: blur(6px);
+    }
+    #onboard.on { display: flex; }
+    #onboardCard { width: min(460px, 90%); padding: 28px; text-align: center; }
+    #onboardCard h1 { color: var(--zinc-100); font-size: 15px; letter-spacing: .22em; margin: 12px 0 8px; }
+    #onboardCard p { font-size: 12px; color: var(--zinc-400); line-height: 1.7; margin-bottom: 16px; }
+    #onboardInput {
+      width: 100%; background: rgba(0,0,0,.45); border: 1px solid var(--cyan-dim); border-radius: 9px;
+      color: var(--zinc-100); font-family: var(--mono); font-size: 14px; padding: 12px 14px; outline: none; text-align: center;
+    }
+    #onboardInput:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(34,211,238,.12); }
+    #onboardErr { color: var(--err); font-size: 11px; margin-top: 10px; min-height: 14px; }
+  </style>
+</head>
+<body>
+  <!-- ============ TITLEBAR ============ -->
+  <div id="titlebar">
+    <div class="dot"></div>
+    <span class="brand">CLAUME BOT // CORE</span>
+    <span class="ver" id="verChip">V3.2</span>
+    <span class="spacer"></span>
+    <button id="btnMin">─</button>
+    <button id="btnMax">□</button>
+    <button class="close" id="btnClose">✕</button>
+  </div>
+
+  <div id="shell">
+    <!-- ============ SIDEBAR ============ -->
+    <aside id="sidebar">
+      <div class="side-section" style="display:flex; justify-content:space-between; align-items:center;">
+        <span class="label" style="color:var(--zinc-300)">System Matrix</span>
+        <span id="bridgeChip" class="chip err">BRIDGE OFFLINE</span>
+      </div>
+
+      <div class="side-scroll">
+        <div class="side-section">
+          <div class="label">Master Profile</div>
+          <div class="card" style="margin-top:8px;">
+            <p>Master: <b id="masterName" class="accent-cyan">unknown</b></p>
+            <div class="sub" id="masterHint">claume bot asks until it knows your name.</div>
+            <div style="display:flex; gap:6px; margin-top:10px;">
+              <input id="masterInput" placeholder="set master name…" />
+              <button class="btn ghost" id="btnSetMaster">SET</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="side-section">
+          <div class="label">Connected Nodes</div>
+          <div style="margin-top:8px;">
+            <div class="node-row"><span>🧠 claume reasoning chain</span><b id="nodeLlm">…</b></div>
+            <div class="node-row"><span>🎙️ voice-stt</span><b id="nodeStt">…</b></div>
+            <div class="node-row"><span>🔊 voice-tts</span><b id="nodeTts">…</b></div>
+            <div class="node-row"><span>👁️ webcam-vision-feed</span><b id="nodeCam">…</b></div>
+            <div class="node-row"><span>🖥️ screen-vision</span><b id="nodeScreen">…</b></div>
+          </div>
+        </div>
+
+        <div class="side-section">
+          <div class="label">Voice</div>
+          <div class="card" style="margin-top:8px;">
+            <div class="sub">TTS accent (Web Speech fallback)</div>
+            <select id="voiceSelect" style="width:100%; margin-top:6px; background:rgba(0,0,0,.4); border:1px solid var(--zinc-900); border-radius:7px; color:var(--zinc-200); font-family:var(--mono); font-size:11px; padding:7px;"></select>
+            <div class="sub" style="margin-top:8px;">Wake word: <b style="color:var(--zinc-300)">"claume"</b> or push MIC. Hold-free: click MIC once to arm listening.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="side-foot">Environment Identity Node // local-host</div>
+    </aside>
+
+    <!-- ============ STAGE ============ -->
+    <main id="stage">
+      <div id="avatarWrap"><canvas id="avatar"></canvas></div>
+
+      <div id="statusStrip">
+        <span id="stateChip">BOOTING</span>
+        <span>CLAUME BOT // POINT-CLOUD AVATAR</span>
+      </div>
+
+      <div id="camPeek">
+        <video id="cam" autoplay muted playsinline></video>
+        <div class="cam-off" id="camOff">CAMERA OFF</div>
+        <div class="cam-label">MASTERCAM</div>
+      </div>
+
+      <div id="dock">
+        <div id="thinkingConsole">
+          <div class="tt">DEEP REASONING STEP-STREAM…</div>
+          <p id="thinkingLog"></p>
+        </div>
+
+        <div id="outBox" class="glass-panel">
+          <div class="label">SYSTEM OUTPUT FEED</div>
+          <p id="terminalOutput">Establishing bridge to claume core…</p>
+        </div>
+
+        <div id="inputBar" class="glass-panel">
+          <input id="commandInputField" placeholder="Issue operational instruction…" />
+          <button class="btn" id="micBtn" title="arm voice capture">🎙 MIC</button>
+          <button class="btn" id="btnScreen" title="let claume bot look at your screen">👁 SCREEN</button>
+          <button class="btn" id="btnSend">EXECUTE</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ============ ONBOARDING ============ -->
+  <div id="onboard">
+    <div id="onboardCard" class="glass-panel">
+      <div class="dot" style="width:10px; height:10px; margin:0 auto; border-radius:50%; background:var(--cyan); animation:pulse 1.6s infinite;"></div>
+      <h1>CLAUME BOT // FIRST CONTACT</h1>
+      <p id="onboardMsg">I don't know you yet. Tell me your name, master — I will remember it every time we meet.</p>
+      <input id="onboardInput" placeholder="your name…" autocomplete="off" />
+      <div id="onboardErr"></div>
+      <button class="btn" id="onboardBtn" style="width:100%; margin-top:6px; padding:12px;">REGISTER MASTER</button>
+    </div>
+  </div>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
