@@ -94,6 +94,14 @@ EOF
 chmod +x "$BIN_DIR/claume"
 echo "[OK] created 'claume' command shim"
 
+# jarvis voice assistant shim (desktop app entrypoint)
+cat > "$BIN_DIR/jarvis" <<EOF
+#!/usr/bin/env bash
+exec "$PY_BIN" -m claume.jarvis_app "\$@"
+EOF
+chmod +x "$BIN_DIR/jarvis"
+echo "[OK] created 'jarvis' command shim"
+
 # ---------------------------------------------------------------- PATH
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;                      # already on PATH

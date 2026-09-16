@@ -42,6 +42,16 @@ def _first_run_setup() -> None:
     config.claume_dir().mkdir(parents=True, exist_ok=True)
     config.skills_dir().mkdir(parents=True, exist_ok=True)
     config.sessions_dir().mkdir(parents=True, exist_ok=True)
+    # Built-in free keys (tokenin community key) — vaulted, never hardcoded
+    # into requests; users override with /key TOKENIN_API_KEY.
+    try:
+        from . import bootstrap
+
+        seeded = bootstrap.seed_builtin_keys()
+        if seeded:
+            print(f"{_ui.GREY}  vaulted built-in keys: {', '.join(seeded)} (free tokenin pool — override with /key){RESET}")
+    except Exception:
+        pass
     # Ask for NVIDIA key (free tier) — interactive terminals only
     proxy.ensure_keys()
     cfg.set("first_run_done", True)
@@ -146,7 +156,9 @@ def _print_context_line(workspace: Path) -> None:
             print(f"{_ui.GREY}  proxy{RESET} {_ui.GREY}not running — open another terminal and run:{RESET} {_ui.MINT}claume proxy{RESET}")
             print(f"{_ui.GREY}  model{RESET} {_ui.MINT}{cfg.model}{RESET}")
     else:
-        print(f"{_ui.GREY}  provider{RESET} {_ui.MINT}{cfg.get('provider')}{RESET} {_ui.GREY}· model{RESET} {_ui.MINT}{cfg.model}{RESET}")
+        prov = str(cfg.get('provider'))
+        note = " · free pool, key built-in" if prov == "tokenin" else ""
+        print(f"{_ui.GREY}  provider{RESET} {_ui.MINT}{prov}{RESET} {_ui.GREY}· model{RESET} {_ui.MINT}{cfg.model}{RESET}{_ui.GREY}{note}{RESET}")
     print(f"{_ui.GREY}  workspace{RESET} {_ui.MINT}{workspace}{RESET}")
     print(f"{_ui.GREY}  {uimod.mode_chip(cfg.mode)} {_ui.GREY}· /help commands · type while a task runs (queued) · /ask · /skip · /exit{RESET}\n")
 
@@ -305,6 +317,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv and argv[0] == "proxy":
         return proxy.serve_foreground(verbose="--verbose" in argv)
 
+    # Subcommand: claume jarvis  ->  desktop voice assistant (own window,
+    # own icon/desktop shortcut — the plugin, launchable outside the REPL)
+    if argv and argv[0] == "jarvis":
+        from . import skills as skillsmod
+
+        try:
+            skillsmod.set_plugin_active("jarvis", True)
+        except Exception:
+            pass
+        from .jarvis_app import JarvisApp
+
+        app = JarvisApp()
+        return app.run()
+
     # Flags
     fast = "--fast" in argv or "-f" in argv
     quiet = "--quiet" in argv or "-q" in argv
@@ -333,6 +359,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     _first_run_setup()
     _ensure_nvidia_key_interactive()
     _start_proxy_if_needed()
+
+    # v3: seed the built-in tokenin key into existing installs too (idempotent,
+    # never overwrites a user-set key), so the default provider just works.
+    try:
+        from . import bootstrap as _bootstrap
+
+        _bootstrap.seed_builtin_keys()
+    except Exception:
+        pass
 
     # Bundled skills (ui-ux-pro-max design pack) seed + auto-activate once
     try:

@@ -35,6 +35,11 @@ def home_dir() -> Path:
 
 
 def claume_dir() -> Path:
+    # Test/CI isolation hook (also used by tests): redirect the whole
+    # claume home (config, vault, skills, sessions) to an alternate dir.
+    override = os.environ.get("CLAUUME_HOME")
+    if override:
+        return Path(override)
     return home_dir() / APP_DIR_NAME
 
 
@@ -89,8 +94,10 @@ class Config:
     """JSON-backed settings store with dot-key access."""
 
     DEFAULTS: Dict[str, Any] = {
-        "provider": "nvidia",
-        "model": "nvidia/nemotron-3-super-120b-a12b",
+        # v3: tokenin is the default free provider (OpenAI-compatible,
+        # community pool with 7 free models — see llm.TOKENIN_MODELS).
+        "provider": "tokenin",
+        "model": "myt/glm-5.3-free",
         "model_fallbacks": [],
         # effort: fast | balanced | deep | ultra (drives step budgets + tokens)
         "effort": "balanced",
@@ -126,6 +133,13 @@ class Config:
         "mcp_servers": {},
         # Skills (github instruction packs)
         "skills_active": {},   # {skill_name: bool}
+        # Plugins (heavier integrations — distinct from skills: see
+        # skills/PLUGINS.md). {plugin_name: bool}
+        "plugins_active": {},
+        # Jarvis desktop voice assistant (claume's built-in plugin)
+        "jarvis_wake_word": "jarvis",
+        "jarvis_voice_accent": "female-british",
+        "jarvis_speak_replies": True,
         # Subagents
         "subagent_max_steps": 14,
         "subagent_max_tool_calls": 24,

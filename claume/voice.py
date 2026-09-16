@@ -241,6 +241,26 @@ def speak(text: str, block: bool = False) -> bool:
     return _speak_unix(clean, accent_pref, block)
 
 
+def speak_now(text: str, accent_pref: str = "", block: bool = False) -> bool:
+    """Speak text UNCONDITIONALLY — bypasses the /voice on/off gate.
+
+    Used by the jarvis plugin: a voice assistant always talks, regardless
+    of whether claume's answer narration is enabled. Same engine ladder
+    as speak(): pyttsx3 → SAPI5 via PowerShell → unix say/espeak.
+    """
+    if not text or not text.strip():
+        return False
+    clean = _clean_for_speech(text)
+    if not clean:
+        return False
+    accent_pref = accent_pref or accent()
+    if _speak_pyttsx3(clean, accent_pref, block):
+        return True
+    if os.name == "nt" and _speak_windows(clean, accent_pref, block):
+        return True
+    return _speak_unix(clean, accent_pref, block)
+
+
 def wait_until_done(timeout: float = 15) -> None:
     """Join a running speech thread before program exit."""
     if _VOICE_THREAD and _VOICE_THREAD.is_alive():

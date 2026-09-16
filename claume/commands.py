@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import webbrowser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -67,6 +68,13 @@ HELP_LINES = [
     f"  {MINT}/proxy{RESET}            start/reuse the free-claume proxy",
     f"  {MINT}/proxy-ui{RESET}         open the luxurious proxy dashboard in browser",
     f"  {MINT}/skills{RESET}           list skills with active/inactive status",
+    f"  {MINT}/plugins{RESET}          list plugins — integrations & machinery (vs skills)",
+    f"  {MINT}/plugin-on|off{RESET} <name>  activate/deactivate a plugin (graphify, jarvis)",
+    f"  {MINT}/jarvis{RESET}           launch the jarvis desktop voice assistant (or /jarvis cli)",
+    f"  {MINT}/graphify{RESET} [path]  build a knowledge graph from a folder (plugin)",
+    f"  {MINT}/memory{RESET} [list]     persistent memory: /memory save <name> <fact> · read · forget",
+    f"  {MINT}/look{RESET} [question]   claume SEES your screen: screenshot + vision analysis of errors",
+    f"  {MINT}/bridge{RESET} [port]     offline phone bridge: QR link over LAN/Bluetooth PAN, no internet",
     f"  {MINT}/skill{RESET} <owner/repo>  install a skill from GitHub (e.g. ui-ux-pro-max)",
     f"  {MINT}/skill-rm{RESET} <name>  remove an installed skill",
     f"  {MINT}/skill-on{RESET} <name>  activate a skill (its .md guides every task)",
@@ -434,6 +442,172 @@ def cmd_skill(args: List[str]) -> None:
     if ok:
         name = args[0].rstrip("/").split("/")[-1]
         print(f"{GREY}  activate it: {MINT}/skill-on {name}{RESET} {GREY}· preview: {MINT}/skill-use {name}{RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Plugins (machinery — see skills/PLUGINS.md; distinct from skills)
+# ---------------------------------------------------------------------------
+def cmd_plugins() -> None:
+    from . import skills as skillsmod
+
+    items = skillsmod.list_plugins()
+    print(f"{GREEN}plugins{RESET} {GREY}({sum(1 for p in items if p['active'])} active / {len(items)} installed){RESET}"
+          f" {GREY}— integrations & commands, not instructions (see /skills){RESET}")
+    for p in items:
+        status = f"{GREEN}● active{RESET}" if p["active"] else f"{GREY}○ inactive{RESET}"
+        print(f"  {status} {MINT}{p['name']}{RESET} {GREY}· {p['command']}{RESET}")
+        if p["description"]:
+            print(f"      {GREY}{p['description']}{RESET}")
+    print(f"{GREY}  /plugin-on <name> · /plugin-off <name> · docs: skills/PLUGINS.md{RESET}")
+
+
+def cmd_plugin_on_off(args: List[str], active: bool) -> None:
+    from . import skills as skillsmod
+
+    if not args:
+        print(f"{RED}usage: /plugin-{'on' if active else 'off'} <name>{RESET}")
+        return
+    ok = skillsmod.set_plugin_active(args[0], active)
+    if ok:
+        print(f"{GREEN}✔ plugin '{args[0]}' {'activated' if active else 'deactivated'}{RESET}")
+        if args[0] == "graphify" and active:
+            print(f"{GREY}  run it: {MINT}/graphify <path>{RESET} {GREY}(installs graphifyy on first use){RESET}")
+        if args[0] == "jarvis" and active:
+            print(f"{GREY}  launch: {MINT}/jarvis{RESET} {GREY}(desktop window) · {MINT}/jarvis cli{RESET} (in-terminal){RESET}")
+    else:
+        print(f"{RED}✗ unknown plugin '{args[0]}' — /plugins lists them{RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Jarvis — desktop voice assistant plugin
+# ---------------------------------------------------------------------------
+def cmd_jarvis(args: List[str]) -> None:
+    from . import skills as skillsmod
+
+    skillsmod.set_plugin_active("jarvis", True)  # launching = activating
+    if args and args[0] == "cli":
+        from .jarvis import Jarvis
+
+        j = Jarvis()
+        caps = __import__("claume.jarvis", fromlist=["capability_report"]).capability_report()
+        print(f"{GREEN}● jarvis{RESET} {GREY}— wake: {caps['wake_word']} · stt: {caps['stt']}{RESET}")
+        print(f"{GREY}  say '{j.keyword}' then speak · 'exit' quits · answers use your claume provider/key{RESET}")
+        j.run_forever()
+        return
+    if args and args[0] == "icon":
+        # regenerate the desktop app icon
+        import subprocess as sp
+
+        script = Path(__file__).resolve().parent / "assets" / "make_jarvis_icon.py"
+        r = sp.run([sys.executable, str(script)], capture_output=True, text=True)
+        print(f"{GREEN}✔ {r.stdout.strip() or 'icon regenerated'}{RESET}")
+        return
+    try:
+        from .jarvis_app import JarvisApp
+    except Exception as exc:
+        print(f"{RED}✗ jarvis window unavailable: {exc}{RESET} {GREY}— try /jarvis cli{RESET}")
+        return
+    print(f"{GREEN}● jarvis{RESET} {GREY}launching the desktop assistant (wake word '{config.Config().get('jarvis_wake_word', 'jarvis')}')…{RESET}")
+    try:
+        app = JarvisApp()
+    except Exception as exc:
+        print(f"{RED}✗ could not open the window: {exc}{RESET} {GREY}— try /jarvis cli{RESET}")
+        return
+    # Run the tkinter mainloop off-thread so the claume REPL stays live;
+    # the window closes with ✕ or Esc.
+    threading.Thread(target=app.run, daemon=True).start()
+    print(f"{GREY}  the REPL stays live — keep typing; ✕/Esc closes the assistant{RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Screen vision — /look · /bridge (offline phone bridge with QR)
+# ---------------------------------------------------------------------------
+def cmd_look(args: List[str]) -> None:
+    from . import screen as screenmod
+
+    question = " ".join(args)
+    print(f"{GREY}capturing your screen…{RESET}")
+    shot = screenmod.capture()
+    if not shot.get("path"):
+        print(f"{RED}✗ screen capture failed on this machine{RESET}")
+        return
+    print(f"{GREEN}✔ screenshot {shot['path']} {GREY}({shot.get('engine')}, {shot.get('bytes', 0) // 1024} KB){RESET}")
+    print(f"{GREY}analyzing with vision ({config.Config().model})…{RESET}")
+    analysis, err = screenmod.look_and_analyze(question)
+    if err:
+        print(f"{RED}✗ {analysis}{RESET}")
+    else:
+        print(f"{ACCENT}◆ claume sees:{RESET}\n{analysis}\n")
+
+
+def cmd_bridge(args: List[str]) -> None:
+    from . import screen as screenmod
+
+    port = int(args[0]) if args and args[0].isdigit() else 8765
+    out = screenmod.phone_bridge(port=port)
+    print(f"{GREEN}● phone bridge{RESET} {GREY}live at{RESET} {MINT}{out['url']}{RESET}")
+    print(f"{GREY}  works over LAN or Bluetooth PAN — phone needs NO internet{RESET}")
+    if out.get("qr_path"):
+        print(f"{ACCENT}  QR: {out['qr_path']}{RESET} {GREY}— open it, scan with your phone camera{RESET}")
+        try:
+            import os as _os
+
+            _os.startfile(out["qr_path"])  # pop the QR image on screen
+        except Exception:
+            pass
+    if out.get("screenshot"):
+        print(f"{GREY}  live screen: {out['screenshot']}{RESET}")
+    print(f"{GREY}  phone controls: refresh screen · diagnose (vision fix suggestions){RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Graphify plugin — knowledge-graph pipeline
+# ---------------------------------------------------------------------------
+def cmd_graphify(args: List[str], agent: "Agent") -> None:
+    from . import skills as skillsmod
+
+    skillsmod.set_plugin_active("graphify", True)
+    path = args[0] if args else "."
+    flags = args[1:] if args else []
+    if not Path(path).exists():
+        print(f"{RED}✗ path not found: {path}{RESET}")
+        return
+    print(f"{GREEN}● graphify{RESET} {GREY}— building the knowledge graph for {path}{RESET}")
+    print(f"{GREY}  first run installs the graphifyy package automatically{RESET}")
+    skill = "graphify"
+    doc = f"Execute the graphify SKILL.md pipeline (skills/graphify/SKILL.md) on '{path}'"
+    if flags:
+        doc += f" with flags: {' '.join(flags)}"
+    agent.history.append({"role": "user", "content": doc})
+    print(f"{GREY}  queued — claume will follow the /graphify steps (detect → extract → cluster → HTML + JSON + report){RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Memory — Fable-style persistent recall (/memory)
+# ---------------------------------------------------------------------------
+def cmd_memory(args: List[str]) -> None:
+    from . import memory as mem
+
+    if not args or args[0] == "list":
+        mems = mem.list_memories()
+        if not mems:
+            print(f"{GREY}memory is empty — claume saves durable facts automatically; "
+                  f"add one with {MINT}/memory save <name> <text>{RESET}")
+            return
+        print(f"{GREEN}memory{RESET} {GREY}({len(mems)} — index loaded into every task){RESET}")
+        for m in mems:
+            print(f"  {MINT}{m['name']}{RESET} {GREY}· {m['type']}{RESET} — {m['description']}")
+        return
+    if args[0] == "save" and len(args) >= 3:
+        print(f"{GREEN}✔ {mem.save_memory(args[1], ' '.join(args[2:]))}{RESET}")
+        return
+    if args[0] == "read" and len(args) >= 2:
+        print(mem.read_memory(args[1]))
+        return
+    if args[0] == "forget" and len(args) >= 2:
+        print(f"{GREEN}✔ {mem.forget_memory(args[1])}{RESET}")
+        return
+    print(f"{GREY}usage: /memory [list] · /memory save <name> <fact> · /memory read <name> · /memory forget <name>{RESET}")
 
 
 def cmd_skill_rm(args: List[str]) -> None:
@@ -1445,6 +1619,22 @@ def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
         cmd_model(args)
     elif name == "effort":
         cmd_effort(args, agent)
+    elif name == "plugins":
+        cmd_plugins()
+    elif name == "plugin-on":
+        cmd_plugin_on_off(args, True)
+    elif name == "plugin-off":
+        cmd_plugin_on_off(args, False)
+    elif name == "jarvis":
+        cmd_jarvis(args)
+    elif name == "graphify":
+        cmd_graphify(args, agent)
+    elif name == "memory":
+        cmd_memory(args)
+    elif name == "look":
+        cmd_look(args)
+    elif name == "bridge":
+        cmd_bridge(args)
     elif name == "auto":
         cmd_auto(args, agent)
     elif name == "mode":

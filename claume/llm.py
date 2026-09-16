@@ -21,6 +21,10 @@ _SSL_CTX = ssl.create_default_context()
 # Well-known OpenAI-compatible public endpoints ("live space" providers).
 PROVIDER_ENDPOINTS: Dict[str, str] = {
     "nvidia": "http://127.0.0.1:8000/v1",  # local free-claume proxy
+    # tokenin: free community model pool, OpenAI-compatible, no card needed.
+    # Key ships built-in (bootstrap.seed_builtin_keys) — override anytime:
+    #   /key TOKENIN_API_KEY
+    "tokenin": "https://tokenin.my.id/v1",
     "groq": "https://api.groq.com/openai/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "together": "https://api.together.xyz/v1",
@@ -32,6 +36,7 @@ PROVIDER_ENDPOINTS: Dict[str, str] = {
 
 PROVIDER_KEY_ENV: Dict[str, str] = {
     "nvidia": "NVIDIA_API_KEY",
+    "tokenin": "TOKENIN_API_KEY",
     "groq": "GROQ_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "together": "TOGETHER_API_KEY",
@@ -39,6 +44,25 @@ PROVIDER_KEY_ENV: Dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "mistral": "MISTRAL_API_KEY",
     "fireworks": "FIREWORKS_API_KEY",
+}
+
+
+# tokenin free model pool (all free, ~1–3 req/min each — the fallback
+# chain rotates them automatically on 429 so a turn always survives).
+TOKENIN_MODELS = [
+    "myt/glm-5.3-free",
+    "myt/gemini-3.5-flash-free",
+    "myt/MiniMax-M3-free",
+    "myt/qwen3.8-max-free",
+    "myt/grok-4.6-free",
+    "myt/mimo-v2.5-free",
+    "myt/claude-opus-4-8-free",
+]
+
+# Provider-scoped fallback chains: applied on top of the primary model so
+# switching providers never carries foreign model names across.
+PROVIDER_MODEL_CHAINS: Dict[str, List[str]] = {
+    "tokenin": TOKENIN_MODELS,
 }
 
 
@@ -65,11 +89,14 @@ def _friendly_http_error(code: int, detail: str) -> str:
     low = short.lower()
     if code == 410 or "end of life" in low or "no longer available" in low:
         return (
-            f"model retired by NVIDIA (410 Gone): {short} — "
+            f"model retired upstream (410 Gone): {short} — "
             "run /model to pick another, or set fallbacks in the proxy admin UI"
         )
     if code == 401:
-        return f"invalid API key (401): {short} — run /key NVIDIA_API_KEY or set it in the admin UI"
+        return (
+            f"invalid API key (401): {short} — run /key for the active provider "
+            "(e.g. /key TOKENIN_API_KEY, /key NVIDIA_API_KEY) or set it in the admin UI"
+        )
     if code == 429:
         return f"rate limited (429): {short} — add another key (NVIDIA_API_KEY_2) or retry"
     return f"LLM HTTP {code}: {short}"
@@ -111,6 +138,12 @@ def stream_chat(
     if primary:
         model_chain.append(primary)
     for fb in cfg.get("model_fallbacks", []) or []:
+        fb = str(fb).strip()
+        if fb and fb not in model_chain:
+            model_chain.append(fb)
+    # Provider-scoped chain (e.g. tokenin's 7 free models) — only models
+    # native to this provider join the chain.
+    for fb in PROVIDER_MODEL_CHAINS.get(provider, []):
         fb = str(fb).strip()
         if fb and fb not in model_chain:
             model_chain.append(fb)
@@ -160,7 +193,9 @@ def stream_chat(
             detail = exc.read().decode("utf-8", "replace")
             err = LLMError(_friendly_http_error(exc.code, detail))
             # Only failover on model-level errors; auth/billing errors are fatal.
-            if exc.code in (400, 404, 410, 429, 500, 502, 503) and len(model_chain) > 1:
+            # 504 included: free community pools often gateway-timeout on one
+            # model while the next in the chain answers instantly.
+            if exc.code in (400, 404, 410, 429, 500, 502, 503, 504) and len(model_chain) > 1:
                 last_error = err
                 continue
             raise err from exc

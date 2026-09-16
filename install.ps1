@@ -124,6 +124,31 @@ Set-Content -Path $cmdShim -Value $cmdBody -Encoding ASCII
 
 Write-Host "[OK] created 'claume' command shims" -ForegroundColor Green
 
+# jarvis desktop-assistant shims (same venv, own entrypoint)
+$jarvisPs1 = Join-Path $BinDir "jarvis.ps1"
+$jarvisBody = '& "' + $VenvDir + '\Scripts\python.exe" -m claume.jarvis_app @args' + "`r`n" + 'exit $LASTEXITCODE'
+Set-Content -Path $jarvisPs1 -Value $jarvisBody -Encoding ASCII
+$jarvisCmd = Join-Path $BinDir "jarvis.cmd"
+$jarvisCmdBody = '@echo off' + "`r`n" + '"' + $VenvDir + '\Scripts\python.exe" -m claume.jarvis_app %*'
+Set-Content -Path $jarvisCmd -Value $jarvisCmdBody -Encoding ASCII
+
+# Desktop shortcut with the jarvis arc-reactor icon
+try {
+    $iconSrc = Join-Path $AppDir "claume\assets\jarvis.ico"
+    $desktop = [Environment]::GetFolderPath("Desktop")
+    $lnk = Join-Path $desktop "jarvis (claume).lnk"
+    $ws = New-Object -ComObject WScript.Shell
+    $sc = $ws.CreateShortcut($lnk)
+    $sc.TargetPath = $jarvisCmd
+    $sc.WorkingDirectory = $env:USERPROFILE
+    $sc.Description = "jarvis — claume voice assistant"
+    if (Test-Path $iconSrc) { $sc.IconLocation = $iconSrc }
+    $sc.Save()
+    Write-Host "[OK] desktop shortcut 'jarvis (claume)' created (arc-reactor icon)" -ForegroundColor Green
+} catch {
+    Write-Host "[~~] desktop shortcut skipped ($($_.Exception.Message))" -ForegroundColor DarkYellow
+}
+
 # ---------------------------------------------------------------- PATH
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if (-not $userPath) { $userPath = "" }

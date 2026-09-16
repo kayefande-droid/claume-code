@@ -193,7 +193,83 @@ def set_all_active(active: bool) -> int:
 
 # Skill folders pre-seeded with the install (bundled in the repo under
 # skills/ and copied into ~/.claume/skills on first run).
-BUNDLED_SKILLS = ("ui-ux-pro-max-skill",)
+# v3 — the full design/agent pack ships bundled:
+#   ui-ux-pro-max  flagship design search (145 docs, CSV ranking engine)
+#   taste-skill    aesthetic taste research: brandkit, brutalist,
+#                  minimalist, redesign, stitch sub-skills + scripts
+#   awesome-claude-design   curated design-technique reference (VoltAgent)
+#   design-md-chrome        DESIGN.md design-system authoring framework
+#   design-motion-principles  motion/animation principles (Framer-grade)
+#   claudex-loop   cross-agent plan→build→review loop discipline
+#   agency-agents  100+ role-specific agent instruction sheets
+#   system-prompts-leaks    transposed Claude/Fable prompt techniques
+BUNDLED_SKILLS = (
+    "ui-ux-pro-max-skill",
+    "taste-skill",
+    "awesome-claude-design",
+    "design-md-chrome",
+    "design-motion-principles",
+    "claudex-loop",
+    "agency-agents",
+    "system-prompts-leaks",
+)
+
+# ---------------------------------------------------------------------------
+# Plugins — heavier INTEGRATIONS (vs skills = instruction packs).
+# A plugin can install dependencies, expose slash commands, and alter what
+# claume CAN DO (not just how it thinks). See skills/PLUGINS.md.
+# ---------------------------------------------------------------------------
+PLUGINS: Dict[str, Dict[str, Any]] = {
+    "graphify": {
+        "description": "any input → knowledge graph → clustered communities → HTML + JSON + audit report (/graphify)",
+        "command": "/graphify",
+        "pip": "graphifyy",
+        "skill_dir": "graphify",
+    },
+    "jarvis": {
+        "description": "desktop voice assistant with wake word, spoken replies and a human-like UI (/jarvis)",
+        "command": "/jarvis",
+        "pip": "",  # stdlib-first: optional extras documented in /jarvis
+        "module": "claume.jarvis",
+    },
+}
+
+
+def plugins_root() -> Path:
+    return skills_root()
+
+
+def list_plugins() -> List[Dict[str, Any]]:
+    """All known plugins with active status from config.plugins_active."""
+    cfg = config.Config()
+    active_map = cfg.get("plugins_active", {}) or {}
+    out: List[Dict[str, Any]] = []
+    for name, meta in PLUGINS.items():
+        out.append(
+            {
+                "name": name,
+                "description": meta.get("description", ""),
+                "command": meta.get("command", ""),
+                "active": bool(active_map.get(name, False)),
+            }
+        )
+    return out
+
+
+def set_plugin_active(name: str, active: bool) -> bool:
+    if name not in PLUGINS:
+        return False
+    cfg = config.Config()
+    m = cfg.get("plugins_active", {}) or {}
+    m[name] = bool(active)
+    cfg.set("plugins_active", m)
+    return True
+
+
+def plugin_active(name: str) -> bool:
+    cfg = config.Config()
+    m = cfg.get("plugins_active", {}) or {}
+    return bool(m.get(name, False))
 
 
 def seed_bundled_skills() -> List[str]:
@@ -234,19 +310,27 @@ def seed_bundled_skills() -> List[str]:
 # ---------------------------------------------------------------------------
 # Instruction injection — the ".md instruction file" adoption
 # ---------------------------------------------------------------------------
-MAX_SKILL_DOCS_CHARS = 12_000  # total budget across all active skills
-PER_SKILL_CAP = 6_000
+MAX_SKILL_DOCS_CHARS = 24_000  # total budget across all active skills
+PER_SKILL_CAP = 3_500
 
 
 def active_instructions(max_chars: int = MAX_SKILL_DOCS_CHARS) -> str:
-    """Concatenated instructions from every active skill, for the system prompt."""
+    """Concatenated instructions from every active skill, for the system prompt.
+
+    Injection order: the flagship bundled skills (BUNDLED_SKILLS order) come
+    FIRST so the design pack always lands in context even when the budget is
+    tight; user-installed extras follow alphabetically. Skills that don't fit
+    stay installed + active for /skill-use, /skill-run and doc search.
+    """
     cfg = config.Config()
     active_map = cfg.get("skills_active", {}) or {}
+    priority = {name: i for i, name in enumerate(BUNDLED_SKILLS)}
+    dirs = [d for d in sorted(skills_root().iterdir())
+            if d.is_dir() and not d.name.startswith(".")]
+    dirs.sort(key=lambda d: priority.get(d.name, len(priority)))
     parts: List[str] = []
     total = 0
-    for d in sorted(skills_root().iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
-            continue
+    for d in dirs:
         if not active_map.get(d.name, False):
             continue
         doc = find_doc(d)
@@ -258,7 +342,7 @@ def active_instructions(max_chars: int = MAX_SKILL_DOCS_CHARS) -> str:
             continue
         text = text[:PER_SKILL_CAP]
         if total + len(text) > max_chars:
-            break
+            continue  # skip this one, try the (smaller) next
         parts.append(f"### Skill: {d.name}\nSource: {doc}\n\n{text}")
         total += len(text)
     if not parts:

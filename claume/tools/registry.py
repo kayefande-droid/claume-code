@@ -8,6 +8,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import fs, shell, web
 from .. import ide
+from .. import memory as _memory
+from .. import screen as _screen
 
 
 class Tool:
@@ -46,6 +48,114 @@ def register(
         return fn
 
     return deco
+
+
+# --------------------------------------------------------------------------
+# Screen vision — capture + analyze (claume & jarvis see the screen)
+# --------------------------------------------------------------------------
+@register(
+    "screen_look",
+    "Take a screenshot of the user's screen NOW and analyze it with "
+    "vision: read visible errors, dialogs, stack traces, UI states. "
+    "Use when the user says 'look at my screen' or when on-screen context "
+    "would help diagnose a problem.",
+    {"question": "What to look for (optional)"},
+    [],
+)
+def _screen_look(base: Path, **kw: Any) -> Tuple[str, bool]:
+    return _screen.look_and_analyze(str(kw.get("question") or ""))
+
+
+@register(
+    "screen_capture",
+    "Capture a screenshot to a file (no model call). Returns the saved "
+    "path — attach it with /image or inspect it yourself.",
+    {},
+    [],
+)
+def _screen_capture(base: Path, **kw: Any) -> Tuple[str, bool]:
+    shot = _screen.capture()
+    if not shot.get("path"):
+        return "error: screen capture failed on this machine", True
+    return (
+        f"screenshot saved: {shot['path']} ({shot.get('engine')}, "
+        f"{shot.get('bytes', 0) // 1024} KB)",
+        False,
+    )
+
+
+@register(
+    "phone_bridge",
+    "Start the offline phone bridge: serves the live screen on the local "
+    "network (LAN or Bluetooth PAN — works with NO internet) and prints a "
+    "QR code the phone scans to connect. Tools: screen view + diagnose.",
+    {"port": "HTTP port (default 8765)"},
+    [],
+)
+def _phone_bridge(base: Path, **kw: Any) -> Tuple[str, bool]:
+    out = _screen.phone_bridge(int(kw.get("port") or 8765))
+    lines = [
+        f"phone bridge live: {out['url']} (LAN/Bluetooth PAN — no internet needed)",
+        f"QR code: {out['qr_path'] or 'unavailable'} — scan with any phone camera",
+        f"screen: {out.get('screenshot', '')}",
+    ]
+    return "\n".join(lines), False
+
+
+# --------------------------------------------------------------------------
+# Persistent memory (Fable-style) — tools the model calls directly
+# --------------------------------------------------------------------------
+@register(
+    "memory_save",
+    "Save one durable fact to persistent memory (survives sessions). "
+    "Types: user | feedback | project | reference.",
+    {"name": "Short kebab-case slug (e.g. 'prefers-tailwind')",
+     "fact": "The fact itself, stated plainly",
+     "type": "user | feedback | project | reference",
+     "description": "One-line summary for the recall index"},
+    ["name", "fact"],
+)
+def _memory_save(base: Path, **kw: Any) -> Tuple[str, bool]:
+    return _memory.save_memory(
+        kw["name"], kw["fact"],
+        str(kw.get("type") or "project"),
+        str(kw.get("description") or ""),
+    ), False
+
+
+@register(
+    "memory_read",
+    "Read a memory file by (or close to) its slug name.",
+    {"name": "Memory slug"},
+    ["name"],
+)
+def _memory_read(base: Path, **kw: Any) -> Tuple[str, bool]:
+    return _memory.read_memory(kw["name"]), False
+
+
+@register(
+    "memory_list",
+    "List all saved memories with type + description.",
+    {},
+    [],
+)
+def _memory_list(base: Path, **kw: Any) -> Tuple[str, bool]:
+    mems = _memory.list_memories()
+    if not mems:
+        return "(no memories saved yet)", False
+    lines = [f"{m['name']} · {m['type']} — {m['description']}" for m in mems]
+    return "\n".join(lines), False
+
+
+@register(
+    "memory_forget",
+    "Delete a memory by slug (only when the user asks to forget something).",
+    {"name": "Memory slug"},
+    ["name"],
+    dangerous=True,
+)
+def _memory_forget(base: Path, **kw: Any) -> Tuple[str, bool]:
+    return _memory.forget_memory(kw["name"]), False
 
 
 # --------------------------------------------------------------------------

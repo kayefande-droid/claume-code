@@ -444,23 +444,33 @@ class TestLLMFallbackChain(_IsolatedConfigMixin, unittest.TestCase):
     def test_chain_builds_from_config(self):
         from claume import llm
 
-        cfg = config.Config()
-        cfg.set("model_fallbacks", ["m/b", "m/c"])
-        captured = {}
+        old_home = os.environ.get("CLAUUME_HOME")
+        try:
+            os.environ["CLAUUME_HOME"] = tempfile.mkdtemp()
+            cfg = config.Config()
+            cfg.set("model_fallbacks", ["m/b", "m/c"])
+            captured = {}
 
-        def fake_urlopen(req, timeout=0, context=None):
-            body = json.loads(req.data.decode())
-            captured["models"] = captured.get("models", [])
-            captured["models"].append(body["model"])
-            raise __import__("urllib").error.HTTPError(
-                req.full_url, 410, "Gone", {}, io.BytesIO(b"{}")
-            )
+            def fake_urlopen(req, timeout=0, context=None):
+                body = json.loads(req.data.decode())
+                captured["models"] = captured.get("models", [])
+                captured["models"].append(body["model"])
+                raise __import__("urllib").error.HTTPError(
+                    req.full_url, 410, "Gone", {}, io.BytesIO(b"{}")
+                )
 
-        with patch.object(llm.urllib.request, "urlopen", fake_urlopen):
-            with self.assertRaises(llm.LLMError):
-                llm.stream_chat([{"role": "user", "content": "hi"}])
-        # primary + 2 fallbacks should all have been attempted
-        self.assertEqual(len(captured["models"]), 3)
+            with patch.object(llm.urllib.request, "urlopen", fake_urlopen):
+                with self.assertRaises(llm.LLMError):
+                    llm.stream_chat([{"role": "user", "content": "hi"}])
+            # primary + 2 fallbacks must come FIRST; provider-scoped chains
+            # (tokenin's free pool) follow them by design.
+            self.assertEqual(captured["models"][:3], [cfg.model, "m/b", "m/c"])
+            self.assertGreaterEqual(len(captured["models"]), 3)
+        finally:
+            if old_home is None:
+                os.environ.pop("CLAUUME_HOME", None)
+            else:
+                os.environ["CLAUUME_HOME"] = old_home
 
 
 if __name__ == "__main__":

@@ -226,7 +226,7 @@ def animate_banner(fast: bool = False) -> None:
 def pixel_tagline(version: str) -> str:
     return (
         f"{MUTED}▌{SOFT} pixel-grade coding agent {MUTED}· v{version} "
-        f"· free-claume proxy · NVIDIA NIM · {SOFT}a kayefande-droid product{RESET}"
+        f"· free model pool · skills + plugins + jarvis · {SOFT}a kayefande-droid product{RESET}"
     )
 
 

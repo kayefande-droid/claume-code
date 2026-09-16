@@ -161,6 +161,15 @@ class Agent:
         except Exception:
             return ""
 
+    def _memory_block(self) -> str:
+        """Fable-style persistent-memory recall block (index + rules)."""
+        try:
+            from . import memory as memorymod
+
+            return memorymod.memory_block()
+        except Exception:
+            return ""
+
     def _secrets(self) -> List[str]:
         """Collect secret values present locally so we can redact output."""
         if not self._secret_cache:
@@ -222,6 +231,7 @@ class Agent:
             registry.schemas(), self._context_block(), mode=self.mode,
             skills_block=self._skills_block(),
             design_block=self._design_block(),
+            memory_block=self._memory_block(),
         )
 
         # --- plan mode: force read-only research -----------------------

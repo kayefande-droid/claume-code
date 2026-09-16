@@ -3,17 +3,27 @@
 ```
  ██████╗██╗      █████╗ ██╗   ██╗███╗   ███╗███████╗
 ██╔════╝██║     ██╔══██╗██║   ██║████╗ ████║██╔════╝
-██║     ██║     ███████║██║   ██║██╔████╔██║█████╗
-██║     ██║     ██╔══██║██║   ██║██║╚██╔╝██║██╔══╝
+██║     ██║     ███████║██║   ██║██╔████╔██║█████╗  
+██║     ██║     ██╔══██║██║   ██║██║╚██╔╝██║██╔══╝  
 ╚█████╗ ███████╗██║  ██║╚██████╔╝██║ ╚═╝ ██║███████╗
  ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝
 ```
 
-**claume-code v2.5** is a pixel-animated **desktop CLI coding agent** by
+**claume-code v3.1** is a pixel-animated **desktop CLI coding agent** by
 **kayefande-droid** (not a web app) that builds full projects from
-natural-language prompts — inspired by Claude Code, powered **free** by
-NVIDIA NIM through the built-in **free-claume proxy**.
-claume always identifies as **claume** — never Claude, never ChatGPT.
+natural-language prompts — inspired by Claude Code, powered by a **free
+model pool** (tokenin by default, key built in — NVIDIA NIM also supported
+through the **free-claume proxy**). claume always identifies as
+**claume** — never Claude, never ChatGPT.
+
+**v3 highlights:** 🧠 **Fable-grade thinking + persistent memory** (transposed
+from the leaked Claude Fable 5 prompts) · 🔌 **plugins vs skills, properly
+differentiated** (PLUGINS.md / SKILLS.md) · 🎙 **jarvis** — a desktop voice
+assistant with wake word, human-like animated UI and its own app icon
+· 👁 **screen vision** — claume and jarvis SEE your screen and fix what they
+see · 📱 **offline phone bridge** — QR code links your phone over
+LAN/Bluetooth PAN, no internet needed · 🔑 **tokenin provider built in**
+(free community pool, zero setup)
 
 > a **kayefande-droid** product — designed, built and maintained by
 > [github.com/kayefande-droid](https://github.com/kayefande-droid)
@@ -193,12 +203,17 @@ Switch anytime: Shift+Tab (in-terminal) or `/mode <name>`.
 | `/mcp-add` · `/mcp-del` | register/remove servers |
 | *(npm servers)* | npx-style servers **auto-install into `~/.claume/mcp/npm`** and launch via `node` — no global downloads |
 | `/skill <owner/repo>` | **install a skill from GitHub** (e.g. `nextlevelbuilder/ui-ux-pro-max-skill`) |
-| `/skills` | installed skills with ● active / ○ inactive status |
+| `/skills` | installed skills with ● active / ○ inactive status (see `skills/SKILLS.md`) |
 | `/skill-on <name>` · `/skill-off <name>` | activate/deactivate — active skills' .md instructions guide every task |
 | `/skill-all on\|off` | activate every skill at once (or none) |
 | `/skill-use <name>` | adopt one skill for the next turn only |
 | `/skill-run <skill> <script> [args]` | run a bundled skill script |
 | `/skill-rm <name>` | remove an installed skill |
+| `/plugins` · `/plugin-on/off <name>` | **plugins** — integrations & machinery (graphify, jarvis), distinct from skills |
+| `/memory [list]` · `/memory save <name> <fact>` | persistent memory (Fable-style recall across sessions) |
+| `/look [question]` | **screen vision** — screenshot + analysis of visible errors |
+| `/bridge [port]` | **offline phone bridge** — QR over LAN/Bluetooth PAN, no internet |
+| `/jarvis [cli\|icon]` | launch the jarvis desktop voice assistant |
 | `/proxy` | start/reuse the free-claume proxy |
 | `/proxy-ui` | claume studio dashboard in your browser |
 | `/keys` · `/key NAME` · `/key-del NAME` | manage the local key vault ("live space") |
@@ -217,6 +232,70 @@ Switch anytime: Shift+Tab (in-terminal) or `/mode <name>`.
 | `balanced` | 4 096 | 24 | 40 | normal features |
 | `deep` | 8 192 | 48 | 80 | architecture, gnarly bugs |
 | `ultra` | 16 384 | 90 | 160 | whole-app builds, huge refactors |
+
+## Screen vision — claume SEES your screen (v3.1)
+
+claume and jarvis can look at your screen, read the errors on it, and fix
+what they see:
+
+```
+/look                      ← screenshot + vision analysis right now
+/look what is the error in the terminal on the right
+```
+
+The agent also has tools it can call itself: `screen_look` (capture +
+vision reasoning), `screen_capture` (save a PNG). Say *"look at my screen
+and fix the failing test"* — it captures, reads the error off the screen,
+and edits the code. Capture uses `mss` when installed, else PowerShell
+System.Drawing (zero required deps). Screenshots live in
+`~/.claume/screens/` (rolling last 8).
+
+## Offline phone bridge — your phone, no internet (v3.1)
+
+```
+/bridge            ← starts the bridge and pops a QR code on screen
+```
+
+Scan the QR with any phone camera: the phone's browser connects to the
+computer **over the local network — Wi-Fi hotspot or Bluetooth PAN — with
+zero internet required**. The page shows the live screen (auto-refresh)
+and a **diagnose** button that runs the same vision analysis claume uses,
+so you can point at problems from your phone. The QR encoder is built in
+(pure stdlib, Reed–Solomon error correction, verified against reference
+decoders); the URL is short enough for the lowest error-correction level.
+
+## jarvis — the desktop voice assistant plugin (v3)
+
+jarvis is bundled with claume and shares its provider, vault and voice
+stack. It has its own app icon and desktop shortcut (created by
+`install.ps1`), and can be launched three ways:
+
+```
+/jarvis              ← animated desktop window from inside claume
+/jarvis cli          ← in-terminal wake-word loop
+jarvis               ← its own command (claude-style shortcut, works anywhere)
+```
+
+* **Wake word** — say "jarvis", then speak. Neural wake word via
+  `openwakeword` (pip install openwakeword) when available; graceful
+  keyword-spotting fallback; push-to-talk as the last resort.
+* **Vision** — "jarvis, look at my screen" grabs a screenshot and reasons
+  over it out loud (reads errors, names the app, states the fix).
+* **Voice-mode replies** — spoken-style answers (≤2 sentences, no markdown),
+  transposed from the leaked Claude voice-mode prompt.
+* **Human-like UI** — an arc-reactor core that breathes (idle), ripples
+  (listening), spins (thinking) and glows amber (speaking); typewriter
+  transcript; drag-anywhere frameless window; zero dependencies (tkinter).
+* **Same brain** — replies go through YOUR claume provider/key (tokenin by
+  default); no separate API key for the assistant.
+
+### The terminal experience (unchanged from v2, verified across IDEs)
+
+All terminal UI modules (frame, chatbox, pinbox) are stdlib-ANSI and
+verified in VS Code / Cursor / JetBrains terminals / Windows Terminal /
+plain conhost: VT output is enabled defensively, keys are read per-event
+(no legacy input() traps), and every renderer degrades to plain input()
+when raw mode is unavailable.
 
 ### Voice I/O (British accents)
 
