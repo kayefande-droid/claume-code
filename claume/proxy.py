@@ -428,6 +428,16 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if self.path == "/admin/check-update":
             self._handle_admin_check_update()
             return
+        if self.path == "/admin/mcp-keys":
+            self._handle_admin_mcp_keys()
+            return
+        if self.path == "/admin/mcp-key-add":
+            # POST only, routed in do_POST
+            self._json(405, {"error": {"message": "use POST"}})
+            return
+        if self.path == "/admin/mcp-key-del":
+            self._json(405, {"error": {"message": "use POST"}})
+            return
         self._json(404, {"error": {"message": f"unknown path {self.path}"}})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -446,6 +456,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if self.path == "/admin/key-del":
             self._handle_admin_key_del()
             return
+        if self.path == "/admin/mcp-key-add":
+            self._handle_admin_mcp_key_add()
+            return
+        if self.path == "/admin/mcp-key-del":
+            self._handle_admin_mcp_key_del()
+            return
         self._json(404, {"error": {"message": f"unknown path {self.path}"}})
 
     def _read_json_body(self) -> Dict[str, Any]:
@@ -456,6 +472,50 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return obj if isinstance(obj, dict) else {}
         except Exception:
             return {}
+
+    # -- MCP key admin routes -------------------------------------------
+    def _handle_admin_mcp_keys(self) -> None:
+        """Masked list of vaulted MCP keys (env var → masked value)."""
+        vault = config.Config().get("key_vault", {}) or {}
+        rows = []
+        for name in sorted(vault.keys()):
+            val = keyvault.get_key(name)
+            if not val:
+                continue
+            masked = (val[:9] + "…" + val[-4:]) if len(val) > 16 else "•••"
+            rows.append({"name": name, "masked": masked})
+        self._json(200, {"keys": rows})
+
+    def _handle_admin_mcp_key_add(self) -> None:
+        """Vault an MCP server key under its env-var name."""
+        body = self._read_json_body()
+        env_name = str(body.get("name") or "").strip().upper()
+        key = str(body.get("api_key") or "").strip()
+        if not env_name or not key:
+            self._json(400, {"ok": False, "error": "name + api_key required"})
+            return
+        keyvault.set_key(env_name, key)
+        cfg = config.Config()
+        m = cfg.get("key_vault", {}) or {}
+        m[env_name] = True
+        cfg.set("key_vault", m)
+        self._refresh_keys()
+        self._json(200, {"ok": True, "stored_as": env_name, "keys": len(collect_keys())})
+
+    def _handle_admin_mcp_key_del(self) -> None:
+        """Remove a vaulted MCP key by env-var name."""
+        body = self._read_json_body()
+        name = str(body.get("name") or "").strip().upper()
+        if not name:
+            self._json(400, {"ok": False, "error": "missing key name"})
+            return
+        ok = keyvault.delete_key(name)
+        cfg = config.Config()
+        m = cfg.get("key_vault", {}) or {}
+        m.pop(name, None)
+        cfg.set("key_vault", m)
+        self._refresh_keys()
+        self._json(200, {"ok": ok, "removed": name, "keys": len(collect_keys())})
 
     # -- admin UI -----------------------------------------------------
     def _handle_admin_page(self) -> None:

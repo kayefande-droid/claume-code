@@ -1,10 +1,11 @@
-"""MCP client for claume-code — stdio JSON-RPC bridge to MCP servers.
+"""MCP client for claume-code — stdio JSON-RPC + HTTP transport to MCP servers.
 
 Implements the Model Context Protocol handshake (initialize →
-tools/list → tools/call) over stdio for servers registered with
-/mcp-add or shipped in the DESIGN_STACK preset. Also contains the
-Link System: a design pipeline that chains several MCP servers so
-claume produces human-grade UI instead of generic divs.
+tools/list → tools/call) over stdio for local servers, plus an HTTP
+transport for composable MCP agents (e.g. 21st.dev-style design agents
+reachable at an https:// URL). Also contains the Link System: a design
+pipeline that chains several MCP servers so claume produces
+human-grade UI instead of generic divs.
 """
 from __future__ import annotations
 
@@ -17,6 +18,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import config
+from . import keyvault
+
 # ---------------------------------------------------------------------------
 # Presets
 # ---------------------------------------------------------------------------
@@ -26,7 +30,8 @@ DESIGN_STACK: Dict[str, Dict[str, Any]] = {
     "uidiscovery-21st": {
         "command": "npx",
         "args": ["-y", "@21st-dev/magic"],
-        "description": "Searches and fetches verified, human-written design blocks and advanced components.",
+        "description": "Searches/fetches verified human-written design blocks and components (21st.dev).",
+        "needs_key": "TWENTY_FIRST_API_KEY",
     },
     "microinteractions-reactbits": {
         "command": "npx",
@@ -36,7 +41,8 @@ DESIGN_STACK: Dict[str, Dict[str, Any]] = {
     "animation-motion": {
         "command": "npx",
         "args": ["@abhishekrajpurohit/motion-dev-mcp"],
-        "description": "Calculates and maps production-ready, hardware-accelerated Framer Motion timelines.",
+        "description": "Production-ready Framer Motion timelines (motion.dev).",
+        "needs_key": "",
     },
     "atomic-shadcnspace": {
         "command": "npx",
@@ -236,7 +242,10 @@ class MCPServer:
                 val = keyvault.resolve_key(str(needs_key))
                 if val:
                     env[str(needs_key)] = val
-                    env.setdefault("API_KEY_21ST", val)
+                    # 21st.dev recognizes both TWENTY_FIRST_API_KEY and API_KEY_21ST
+                    if str(needs_key).upper() in ("TWENTY_FIRST_API_KEY", "API_KEY_21ST"):
+                        env["TWENTY_FIRST_API_KEY"] = val
+                        env["API_KEY_21ST"] = val
             except Exception:
                 pass
         try:
@@ -412,14 +421,22 @@ def set_enabled(name: str, enabled: bool) -> bool:
     return True
 
 
-def get_server(name: str) -> MCPServer:
-    """Get (and cache) a running MCPServer by config name."""
+def _make_server(name: str, spec: Dict[str, Any]) -> Any:
+    """Dispatch to HTTPMCPServer when the spec command is an http URL,
+    otherwise a stdio MCPServer."""
+    if isinstance(spec, dict) and str(spec.get("command", "")).startswith("http"):
+        return HTTPMCPServer(name, spec)
+    return MCPServer(name, spec)
+
+
+def get_server(name: str) -> Any:
+    """Get (and cache) a running MCPServer/HTTPMCPServer by config name."""
     if name in _processes:
         return _processes[name]
     servers = _servers_from_config()
     if name not in servers:
         raise MCPError(f"unknown MCP server '{name}' (configured: {', '.join(servers) or 'none'})")
-    srv = MCPServer(name, servers[name])
+    srv = _make_server(name, servers[name])
     if not srv.initialize():
         raise MCPError(f"server '{name}' failed MCP initialize handshake")
     _processes[name] = srv
@@ -482,17 +499,22 @@ def bridge_to_registry() -> int:
             srv = get_server(name)
         except MCPError:
             continue
+        is_http = isinstance(srv, HTTPMCPServer) and bool(getattr(srv, "base_url", ""))
         for tool in srv.list_tools():
             tname = tool.get("name", "")
             if not tname:
                 continue
             clname = f"mcp_{name}_{tname}"[:60]
-            desc = str(tool.get("description", "MCP tool"))[:160]
+            desc = str(tool.get("description", f"[mcp:{name}] {srv.description or 'MCP tool'}"))[:160]
 
-            def _make(srv_name: str, tool_name: str):
+            def _make(srv_name: str, tool_name: str, _is_http: bool):
                 def _fn(base: Path, **kw: Any) -> Tuple[str, bool]:
                     try:
-                        out = call_tool(srv_name, tool_name, kw)
+                        if _is_http:
+                            srv = get_server(srv_name)
+                            out = srv.call_tool(tool_name, kw)
+                        else:
+                            out = call_tool(srv_name, tool_name, kw)
                         return out, False
                     except MCPError as exc:
                         return f"error: {exc}", True
@@ -500,8 +522,8 @@ def bridge_to_registry() -> int:
                 return _fn
 
             _REGISTRY_TARGET.register(
-                clname, f"[mcp:{name}] {desc}", {}, []
-            )(_make(name, tname))
+                clname, desc, {}, []
+            )(_make(name, tname, is_http))
             count += 1
     _BRIDGED = True
     _bridged_count = count
@@ -537,23 +559,47 @@ def design_pipeline(request: str, workspace: Path) -> Tuple[str, bool]:
     animated = ""
 
     def _try(server: str, tool_candidates: List[str], args: Dict[str, Any]) -> str:
-        """Call the first tool name that exists on the server."""
-        try:
-            srv = get_server(server)
-            names = {t.get("name", "") for t in srv.list_tools()}
-        except MCPError as exc:
-            steps_log.append(f"⚠ {server}: {exc}")
+        """Call the first tool name that exists on the server, with a warm
+        start + one retry so a cold npx download on first use does not kill
+        the whole pipeline."""
+        last_err: Optional[str] = None
+        for attempt in range(2):
+            try:
+                # Ensure the server process is up before we probe tool names
+                # (get_server starts + initializes lazily; call it once).
+                srv = get_server(server)
+                if not srv._warmed:
+                    try:
+                        srv.initialize()
+                    except MCPError:
+                        pass
+                names = {t.get("name", "") for t in srv.list_tools()}
+            except MCPError as exc:
+                last_err = str(exc)
+                steps_log.append(f"⚠ {server} (attempt {attempt + 1}): {exc}")
+                if attempt == 0:
+                    import time
+                    time.sleep(1.5)
+                    continue
+                return ""
+            for tool in tool_candidates:
+                if tool in names:
+                    try:
+                        out = srv.call_tool(tool, args)
+                        steps_log.append(f"✓ {server}::{tool}")
+                        return out[:8000]
+                    except MCPError as exc:
+                        last_err = str(exc)
+                        steps_log.append(f"⚠ {server}::{tool}: {exc}")
+                        if attempt == 0:
+                            import time
+                            time.sleep(1.0)
+                            break  # retry the whole server once
+                        return ""
+            steps_log.append(f"⚠ {server} (attempt {attempt + 1}): no tool among {tool_candidates}")
             return ""
-        for tool in tool_candidates:
-            if tool in names:
-                try:
-                    out = srv.call_tool(tool, args)
-                    steps_log.append(f"✓ {server}::{tool}")
-                    return out[:8000]
-                except MCPError as exc:
-                    steps_log.append(f"⚠ {server}::{tool}: {exc}")
-                    return ""
-        steps_log.append(f"⚠ {server}: no tool among {tool_candidates}")
+        if last_err:
+            steps_log.append(f"⚠ {server}: gave up after retries — {last_err[:120]}")
         return ""
 
     # Stage 1 — structure: search Shadcn Space blocks for the layout.

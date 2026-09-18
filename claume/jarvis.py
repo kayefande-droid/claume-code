@@ -185,7 +185,12 @@ def tts_available() -> bool:
 # The brain — one shared LLM conversation through claume's provider
 # ---------------------------------------------------------------------------
 class Jarvis:
-    """Wake-word voice assistant sharing claume's provider, vault and voice."""
+    """Wake-word voice assistant sharing claume's provider, vault and voice.
+
+    Jarvis uses ONLY the NVIDIA NIM API (via the local free-claume proxy).
+    On startup the proxy is auto-started if needed, so jarvis can activate
+    as a bot even when the user only opened `claume jarvis`.
+    """
 
     def __init__(self, keyword: Optional[str] = None, speak_replies: bool = True) -> None:
         cfg = config.Config()
@@ -198,6 +203,8 @@ class Jarvis:
         self._stop = threading.Event()
         self._listeners: List[Callable[[str, str], None]] = []
         self._tts_lock = threading.Lock()
+        self._recording = False
+        self._last_gesture: Optional[str] = None
 
     # -- observer hooks: fn(state, detail) for UIs -------------------------
     def on_state(self, fn: Callable[[str, str], None]) -> None:
@@ -216,11 +223,8 @@ class Jarvis:
                         "what do you see", "check my screen", "read the error")
 
     def ask(self, text: str) -> str:
-        """Send one utterance to the LLM (claume's provider/key) and shape
-        the reply for speech. Returns the spoken reply text.
-
-        Screen awareness: utterances like “look at my screen” make jarvis
-        grab a screenshot and reason over it with vision (same provider)."""
+        """Send one utterance to the LLM through the nvidia proxy (NIM only)
+        and shape the reply for speech."""
         text = (text or "").strip()
         if not text:
             return ""
@@ -231,7 +235,7 @@ class Jarvis:
         self.history.append({"role": "user", "content": text})
         messages = [{"role": "system", "content": voice_system_prompt()}] + self.history[-10:]
         try:
-            reply = llm.stream_chat(messages, effort="fast")
+            reply = llm.stream_chat(messages, provider="nvidia", effort="fast")
         except llm.LLMError as exc:
             reply = f"Connection problem. {str(exc)[:80]}"
         reply = _spoken_shape(reply)
@@ -244,7 +248,7 @@ class Jarvis:
         return reply
 
     def _ask_with_screen(self, text: str) -> str:
-        """Capture the screen and answer with vision (claume's provider)."""
+        """Capture the screen and answer with vision (nvidia proxy / NIM)."""
         from . import screen as screenmod
 
         self._set_state("thinking", text)
@@ -271,7 +275,8 @@ class Jarvis:
 
             reply = llm.stream_chat(
                 [{"role": "system", "content": voice_system_prompt()},
-                 {"role": "user", "content": content}], effort="balanced"
+                 {"role": "user", "content": content}],
+                provider="nvidia", effort="balanced",
             )
         except Exception as exc:
             reply = f"Vision failed. {str(exc)[:80]}"
@@ -284,6 +289,47 @@ class Jarvis:
                 _tts_speak(reply, str(config.Config().get("jarvis_voice_accent", "female-british")))
         self._set_state("idle", reply)
         return reply
+
+    # -- gesture / always-listening / recording hooks ---------------------
+    def set_gesture(self, gesture: str) -> None:
+        """Feed an observed gesture / pointer gesture to jarvis so it can
+        react (e.g. 'pointed at top-right', 'wave', 'tapped screen')."""
+        self._last_gesture = gesture
+        if not gesture:
+            return
+        self.history.append({"role": "user", "content": f"[gesture observed]: {gesture}"})
+        self._set_state("thinking", f"gesture: {gesture}")
+        messages = [{"role": "system", "content": voice_system_prompt()}] + self.history[-10:]
+        try:
+            reply = llm.stream_chat(messages, provider="nvidia", effort="fast")
+        except Exception as exc:
+            reply = ""
+        reply = _spoken_shape(reply)
+        if reply:
+            self.history.append({"role": "assistant", "content": reply})
+            if self.speak_replies:
+                self._set_state("speaking", reply)
+                with self._tts_lock:
+                    _tts_speak(reply, str(config.Config().get("jarvis_voice_accent", "female-british")))
+            self._set_state("idle", reply)
+
+    def set_recording(self, on: bool) -> None:
+        """When the user says 'record me' / 'start recording', jarvis enters
+        an always-listening + gesture-follow + record mode."""
+        self._recording = on
+        if on:
+            self._set_state("listening", "always-listening + recording mode on")
+        else:
+            self._set_state("idle", "recording off")
+
+    def live_observe(self, observation: str) -> None:
+        """In recording mode, feed a live observation (speech chunk / gesture
+        / screen frame caption) so jarvis keeps context across the session."""
+        if not self._recording or not observation:
+            return
+        self.history.append({"role": "user", "content": f"[live]: {observation}"})
+        if len(self.history) > 24:
+            self.history = self.history[-12:]
 
     # -- wake-word loop ----------------------------------------------------
     def run_forever(self, on_reply: Optional[Callable[[str, str], None]] = None) -> None:

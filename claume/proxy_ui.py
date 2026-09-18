@@ -262,7 +262,43 @@ footer a{color:var(--dim);text-decoration:none}
     <p class="sdesc">claume's own visual language — the one that rendered this dashboard. Use it for
       claume's website or any app UI you ask it to design: the Link System pipeline walks these four
       stages, pulling fonts, components, motion and canvas assets as it builds.</p>
-    <div class="pipe">
+    <!-- ══════════════ 03b · mcp keys ══════════════ -->
+  <section>
+    <div class="shead"><span class="snum">03b</span><h2>MCP API keys</h2></div>
+    <p class="sdesc">Each MCP server claume connects to can require its own API key (21st.dev uses TWENTY_FIRST_API_KEY, 
+      other design agents use their own env var). Add those keys here — they are vaulted locally and injected at
+      spawn, never stored in config. claume's own built-in design-generator tools (icon/asset/ui-image) use the
+      same NVIDIA NIM key as the proxy, so no extra key is needed for those.</p>
+    <div class="grid2">
+      <div class="card">
+        <label>Add MCP key <span style="float:right;text-transform:none;letter-spacing:0">server env var → vault</span></label>
+        <div class="row" style="margin-top:8px;flex-wrap:nowrap;align-items:stretch">
+          <input type="text" id="mcp-env" placeholder="TWENTY_FIRST_API_KEY (or env var name)" style="flex:1;min-width:120px">
+          <input type="password" id="mcp-key" placeholder="api key value" style="flex:2;min-width:160px">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" onclick="addMcpKey()">Add MCP key</button>
+          <button class="ghost" onclick="listMcpKeys()">List vaulted MCP keys</button>
+        </div>
+        <div class="hint">Tip: for 21st.dev, the env var is <code>TWENTY_FIRST_API_KEY</code> (also accepted as <code>API_KEY_21ST</code>).
+          Get a key at the server's developer portal — claume never generates one for you.</div>
+      </div>
+      <div class="card">
+        <label>Vaulted MCP keys <span style="float:right;text-transform:none;letter-spacing:0">
+          <a href="javascript:listMcpKeys()" style="color:var(--mint)">↻ refresh</a></span></label>
+        <table style="margin-top:6px">
+          <thead><tr><th>env var</th><th>status</th><th></th></tr></thead>
+          <tbody id="mcpkeyrows"><tr><td colspan="3" class="mut">no MCP keys vaulted yet</td></tr></tbody>
+        </table>
+        <div class="hint" style="margin-top:14px">Built-in design-generator tools (<code>design_generate_icon</code>, 
+          <code>design_generate_asset</code>, <code>generate_ui_image</code>) use the proxy's NVIDIA NIM key — no
+          separate MCP key required. Add 21st.dev / other server keys above.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 04 · design system ══════════════ -->
+  <div class="pipe">
       <div class="stage"><div class="n">STAGE 1</div><div class="t">Layout blueprint</div>
         <div class="d">atomic-shadcnspace — grids, tokens, spatial rhythm. Typography: Fraunces display over Space Grotesk UI, JetBrains Mono for code.</div></div>
       <div class="stage"><div class="n">STAGE 2</div><div class="t">Human components</div>
@@ -321,7 +357,40 @@ async function loadData(){
     setPill('pill-model', d.model.split('/').pop().slice(0,26), '');
     checkUpdate();
     renderHealth(d.health);
+    listMcpKeys();
   }catch(e){ setPill('pill-proxy','proxy unreachable','err'); msg('cannot reach proxy: '+e,'err'); }
+}
+
+/* ---------- MCP key management ---------- */
+function listMcpKeys(){
+  fetch('/admin/mcp-keys').then(r=>r.json()).then(d=>{
+    const tb = $('mcpkeyrows');
+    if(!d.keys || !d.keys.length){ tb.innerHTML = '<tr><td colspan="3" class="mut">no MCP keys vaulted yet — add one on the left</td></tr>'; return; }
+    tb.innerHTML = d.keys.map(k =>
+      '<tr><td>'+k.name+'</td>' +
+      '<td class="mut">'+(k.masked||'—')+'</td>' +
+      '<td><a href="javascript:delMcpKey(\''+k.name.replace(/'/g,"\\'")+'\')" style="color:var(--faint);text-decoration:none">✕</a></td></tr>'
+    ).join('');
+  }).catch(e=>msg('list mcp keys failed: '+e,'err'));
+}
+function addMcpKey(){
+  const env = $('mcp-env').value.trim().toUpperCase();
+  const key = $('mcp-key').value.trim();
+  if(!env){ msg('env var name required (e.g. TWENTY_FIRST_API_KEY)','err'); return; }
+  if(!key){ msg('key value required','err'); return; }
+  fetch('/admin/mcp-key-add',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:env, api_key:key})}).then(r=>r.json()).then(d=>{
+    if(d.ok){ msg('✓ '+d.stored_as+' vaulted — claume injects it when spawning the server','ok'); $('mcp-key').value=''; listMcpKeys(); }
+    else msg('✗ '+(d.error||'rejected'),'err');
+  }).catch(e=>msg('add mcp key failed: '+e,'err'));
+}
+function delMcpKey(name){
+  if(!name) return;
+  fetch('/admin/mcp-key-del',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name})}).then(r=>r.json()).then(d=>{
+    if(d.ok){ msg('removed '+d.removed,'ok'); listMcpKeys(); }
+    else msg('✗ '+(d.error||'not found'),'err');
+  }).catch(e=>msg('del mcp key failed: '+e,'err'));
 }
 
 /* ---------- key health ---------- */

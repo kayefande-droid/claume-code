@@ -464,6 +464,10 @@ def qr_png(text: str, scale: int = 8, quiet: int = 3) -> bytes:
 #                    exists) rendered in the PC-side tkinter viewer
 #   files both ways: /files listing, /download/<name>, POST /upload,
 #                    /delete — a two-way AirDrop-style exchange
+# Transports: WiFi/LAN when both devices share a network (preferred, fast),
+# Bluetooth PAN otherwise (phone hotspot/PAN pairing — slower but offline).
+# The server binds 0.0.0.0 so BOTH transports work simultaneously; each gets
+# its own QR code (bridge-qr-wifi-<port>.png / bridge-qr-bluetooth-<port>.png).
 # ---------------------------------------------------------------------------
 def local_ip() -> str:
     """Best-effort host LAN address (works offline once an interface is up)."""
@@ -477,6 +481,93 @@ def local_ip() -> str:
         s.close()
 
 
+# ---------------------------------------------------------------------------
+# Transport selection — WiFi (same network) preferred, Bluetooth PAN fallback
+# ---------------------------------------------------------------------------
+def _iface_ips() -> List[str]:
+    """All IPv4 addresses of this machine (WiFi, Ethernet, BT-PAN, ...)."""
+    ips: List[str] = []
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+        for info in infos:
+            ip = info[4][0]
+            if ip not in ips and not ip.startswith("127."):
+                ips.append(ip)
+    except Exception:
+        pass
+    probe = local_ip()
+    if probe not in ips and not probe.startswith("127."):
+        ips.append(probe)
+    return ips
+
+
+def bluetooth_pan_ip() -> str:
+    """Local IPv4 of the Bluetooth PAN adapter, "" if none is paired/up.
+    Windows: the 'Bluetooth Network Connection' shows up in ipconfig.
+    Linux: bt-pan/bluez exposes bnep0. macOS: Bluetooth PAN interface."""
+    import re as _re
+
+    import subprocess as _sp
+    try:
+        if os.name == "nt":
+            out = _sp.run(["ipconfig"], capture_output=True, text=True, timeout=6).stdout
+            # adapter block ends with the IPv4 line
+            blocks = _re.split(r"\n\s*\n", out)
+            for block in blocks:
+                if _re.search(r"bluetooth", block, _re.IGNORECASE):
+                    m = _re.search(r"IPv4[^:\n]*:\s*([0-9.]+)", block)
+                    if m:
+                        return m.group(1)
+        elif os.name == "posix":
+            out = _sp.run(["ip", "-4", "addr"], capture_output=True, text=True,
+                          timeout=6).stdout
+            for block in out.split("\n"):
+                if "bnep" in block or "btpan" in block:
+                    m = _re.search(r"inet\s+([0-9.]+)", block)
+                    if m:
+                        return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+def wifi_link_active() -> bool:
+    """True when a WiFi adapter is connected (or, as a fallback, when any
+    non-loopback IPv4 exists — i.e. we are on some LAN)."""
+    import subprocess as _sp
+    try:
+        if os.name == "nt":
+            out = _sp.run(["netsh", "wlan", "show", "interfaces"],
+                          capture_output=True, text=True, timeout=6).stdout
+            if "state" in out.lower():
+                return "connected" in out.lower()
+    except Exception:
+        pass
+    return bool(_iface_ips())
+
+
+def same_subnet(a: str, b: str) -> bool:
+    """/24 membership — good enough for home & phone-hotspot networks."""
+    try:
+        ka = tuple(int(x) for x in a.split("."))
+        kb = tuple(int(x) for x in b.split("."))
+        return ka[:3] == kb[:3]
+    except Exception:
+        return False
+
+
+def pick_transport() -> Tuple[str, str]:
+    """Choose the URL base for the QR: WiFi/LAN when a WiFi link is up,
+    Bluetooth PAN otherwise. Returns (ip, transport)."""
+    bt = bluetooth_pan_ip()
+    lan = local_ip()
+    if lan.startswith("127.") and bt:
+        return bt, "bluetooth"
+    if wifi_link_active() or not bt:
+        return lan, "wifi"
+    return bt, "bluetooth"
+
+
 _BRIDGE_STATE: Dict[str, Any] = {
     "server": None,
     "port": 0,
@@ -486,6 +577,7 @@ _BRIDGE_STATE: Dict[str, Any] = {
     "phone_frames": None,    # deque of jpeg bytes from the phone cast
     "viewer": None,          # PC-side tkinter viewer root (or None)
     "https": False,
+    "urls": {},              # transport -> url ("wifi", "bluetooth")
 }
 
 
@@ -717,7 +809,11 @@ def phone_bridge(port: int = 8765, duration: float = 0.0, open_viewer: bool = Tr
                 self.send_header("Content-Length", "0")
                 self.end_headers()
             elif p == "/qr.png":
-                png = qr_png(f"http://{local_ip()}:{_BRIDGE_STATE['port']}", scale=6)
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                net = q.get("net", [""])[0]
+                url_for = (_BRIDGE_STATE.get("urls") or {}).get(net) \
+                    or f"http://{local_ip()}:{_BRIDGE_STATE['port']}"
+                png = qr_png(url_for, scale=6)
                 self._hdrs("image/png", len(png))
                 self.wfile.write(png)
             else:
@@ -745,7 +841,10 @@ def phone_bridge(port: int = 8765, duration: float = 0.0, open_viewer: bool = Tr
                 self.send_error(404)
 
     ip = local_ip()
-    server = ThreadingHTTPServer((ip, port), H)
+    bt_ip = bluetooth_pan_ip()
+    # Bind all interfaces so BOTH the WiFi/LAN address and the Bluetooth PAN
+    # address (when a PAN pairing exists) reach the same server.
+    server = ThreadingHTTPServer(("0.0.0.0", port), H)
     _BRIDGE_STATE["server"] = server
     _BRIDGE_STATE["port"] = port
 
@@ -772,7 +871,10 @@ def phone_bridge(port: int = 8765, duration: float = 0.0, open_viewer: bool = Tr
             .not_valid_before(_dt.datetime.now(_dt.timezone.utc))
             .not_valid_after(_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=365))
             .add_extension(
-                x509.SubjectAlternativeName([x509.DNSName(ip), x509.IPAddress(ip_address(ip))]),
+                x509.SubjectAlternativeName(
+                    [x509.DNSName("claume-bridge.local")]
+                    + [x509.IPAddress(ip_address(a)) for a in {ip, bt_ip} if a]
+                ),
                 critical=False,
             )
             .sign(key, hashes.SHA256())
@@ -798,6 +900,10 @@ def phone_bridge(port: int = 8765, duration: float = 0.0, open_viewer: bool = Tr
     _BRIDGE_STATE["https"] = https
     scheme = "https" if https else "http"
     url = f"{scheme}://{ip}:{port}"
+    urls: Dict[str, str] = {"wifi": url}
+    if bt_ip:
+        urls["bluetooth"] = f"{scheme}://{bt_ip}:{port}"
+    _BRIDGE_STATE["urls"] = urls
 
     def serve() -> None:
         try:
@@ -810,15 +916,21 @@ def phone_bridge(port: int = 8765, duration: float = 0.0, open_viewer: bool = Tr
     _BRIDGE_STATE["thread"] = t
 
     qr_path = ""
+    qr_paths: Dict[str, str] = {}
     try:
-        png = qr_png(url, scale=6)
-        p = screens_dir() / f"bridge-qr-{port}.png"
-        p.write_bytes(png)
-        qr_path = str(p)
+        for net, u in urls.items():
+            png = qr_png(u, scale=6)
+            p = screens_dir() / f"bridge-qr-{net}-{port}.png"
+            p.write_bytes(png)
+            qr_paths[net] = str(p)
+        qr_path = qr_paths.get("wifi", next(iter(qr_paths.values()), ""))
     except Exception:
         pass
 
-    out = {"url": url, "qr_path": qr_path, "screenshot": shot.get("path", ""),
+    out = {"url": url, "qr_path": qr_path, "qr_paths": qr_paths,
+           "urls": urls, "transport": "wifi" if wifi_link_active() else "bluetooth",
+           "bluetooth_pan_ip": bt_ip,
+           "screenshot": shot.get("path", ""),
            "ip": ip, "port": port, "engine": shot.get("engine", ""), "https": https}
     if duration > 0:
         def stopper() -> None:

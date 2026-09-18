@@ -67,6 +67,14 @@ def parse_turn(text: str) -> ParsedTurn:
 
     result.thought = str(obj.get("thought", ""))
 
+    # Some providers surface explicit reasoning in a dedicated field
+    # (reasoning_content / reasoning). When present, fold it into the
+    # thought channel so the user sees the reasoning path, not just the
+    # final text. Never prefer it over a real 'thought' the model wrote.
+    reasoning = obj.get("reasoning_content") or obj.get("reasoning") or ""
+    if isinstance(reasoning, str) and reasoning.strip() and not result.thought:
+        result.thought = reasoning.strip()[:1200]
+
     if obj.get("final"):
         result.final = str(obj["final"])
         return result

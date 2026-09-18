@@ -25,6 +25,20 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import config
 
 MANIFEST = "skill-manifest.json"
+
+DESIGN_REPO_FAMILY = [
+    ("awesome-design-md",   "https://github.com/VoltAgent/awesome-design-md.git"),
+    ("ai-logo-studio",      "https://github.com/SamurAIGPT/ai-logo-studio.git"),
+    ("image-generator",      "https://github.com/ChanMeng666/image-generator.git"),
+    ("LVGL-AI-Studio",      "https://github.com/dazeb/LVGL-AI-Studio.git"),
+]
+
+
+def _repo_url_for_name(name: str) -> Optional[str]:
+    for n, url in DESIGN_REPO_FAMILY:
+        if n == name:
+            return url
+    return None
 # Files that carry the skill's instruction payload.
 DOC_NAMES = ("SKILL.md", "skill.md", "Skill.md", "README.md")
 
@@ -203,6 +217,13 @@ def set_all_active(active: bool) -> int:
 #   claudex-loop   cross-agent plan→build→review loop discipline
 #   agency-agents  100+ role-specific agent instruction sheets
 #   system-prompts-leaks    transposed Claude/Fable prompt techniques
+# Plus the design-repo family — installed as default-active skills so
+# claume can draw real design structure, icons, images and LVGL-style
+# composable UI patterns from these repos in every build:
+#   awesome-design-md      VoltAgent design-technique reference repo
+#   ai-logo-studio         SamurAIGPT AI logo/icon studio repo
+#   image-generator        ChanMeng666 image-generators repo
+#   LVGL-AI-Studio         dazeb LVGL + AI UI studio repo
 BUNDLED_SKILLS = (
     "ui-ux-pro-max-skill",
     "taste-skill",
@@ -212,6 +233,11 @@ BUNDLED_SKILLS = (
     "claudex-loop",
     "agency-agents",
     "system-prompts-leaks",
+    # Design-repo family — installed once, active by default.
+    "awesome-design-md",
+    "ai-logo-studio",
+    "image-generator",
+    "LVGL-AI-Studio",
 )
 
 # ---------------------------------------------------------------------------
@@ -300,6 +326,22 @@ def seed_bundled_skills() -> List[str]:
                 active_map[name] = True
                 changed = True
                 touched.append(f"activated {name}")
+            # Design-repo family: clone from the user's GitHub URLs when no
+            # bundled copy exists locally (fresh installs). They still come
+            # up active by default so /design and the skills actually work.
+            if name in (n for n, _ in DESIGN_REPO_FAMILY) and not dest.is_dir():
+                url = _repo_url_for_name(name)
+                if url:
+                    rc = subprocess.call(
+                        ["git", "clone", "--depth", "1", url, str(dest)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if rc == 0:
+                        touched.append(f"installed {name} from {url}")
+                        changed = True
+                        active_map[name] = True
+                        touched.append(f"activated {name}")
         if changed:
             cfg.set("skills_active", active_map)
     except Exception:

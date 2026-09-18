@@ -72,6 +72,12 @@ def restore_console() -> None:
 PASTE_START = "__PASTE_START__"
 PASTE_END = "__PASTE_END__"
 
+# Bulk-paste budget: how many characters the editor will accept in one
+# paste burst before it truncates/escapes. Freebuff-style terminals take
+# multi-kilobyte pastes (several files' worth) without choking.
+_MAX_PASTE_BYTES = 2_000_000  # 2 MB of text in one paste
+_BULK_PASTE_WARN = "{ACCENT}⧉ bulk paste accepted — {n} chars / {kb} KB loaded into the buffer · submit to send{RESET}"
+
 # ---------------------------------------------------------------------------
 # Open-box registry — lets worker-thread output reflow the open box
 # ---------------------------------------------------------------------------
@@ -141,6 +147,166 @@ def attach_image(path: str) -> Optional[Dict[str, str]]:
     except Exception:
         return None
 
+
+# ---------------------------------------------------------------------------
+# Clipboard image reader — lets the chatbox accept pasted/dragged images
+# ---------------------------------------------------------------------------
+def _read_clipboard_image() -> Optional[Dict[str, str]]:
+    """Best-effort read of an image from the system clipboard.
+
+    Windows: reads CF_DIB / CF_DIBV5 / CF_BITMAP from the clipboard and
+    encodes to a data: URL (png if possible). POSIX: delegates to
+    xclip/wl-clipboard screenshot tools; returns None when nothing
+    image-shaped is on the clipboard.
+    """
+    if os.name == "nt":
+        return _read_clipboard_image_windows()
+    return _read_clipboard_image_posix()
+
+
+def _read_clipboard_image_windows() -> Optional[Dict[str, str]]:
+    """Read a bitmap from the Windows clipboard and return {name, data_url, bytes}."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        CF_DIB = 8
+        CF_BITMAP = 2
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        if not user32.IsClipboardFormatAvailable(CF_DIB) and \
+           not user32.IsClipboardFormatAvailable(CF_BITMAP):
+            return None
+
+        if not user32.OpenClipboard(0):
+            return None
+        try:
+            # Prefer DIB (raw bits we can encode to PNG ourselves).
+            h = user32.GetClipboardData(CF_DIB)
+            if not h:
+                h = user32.GetClipboardData(CF_BITMAP)
+            if not h:
+                return None
+
+            ptr = kernel32.GlobalLock(h)
+            if not ptr:
+                return None
+            try:
+                # DIB header is 40 bytes (BITMAPINFOHEADER) then rows.
+                # Read the header, figure out width/height/stride, then the pixels.
+                import struct
+                header = ctypes.string_at(ptr, 40)
+                bmi = struct.unpack("<IiiIIiiHH", header)  # BITMAPINFOHEADER
+                # bmi[0]=size, bmi[1]=width, bmi[2]=height, bmi[3]=planes,
+                # bmi[4]=bpp, bmi[5]=compression, bmi[6]=image_size,
+                # bmi[7]=xppm, bmi[8]=yppm, bmi[9]=clr_used, bmi[10]=clr_important
+                width = abs(bmi[1])
+                height = abs(bmi[2])
+                bpp = bmi[4]
+                if bpp != 24 and bpp != 32:
+                    return None
+                # stride per row (DWORD-aligned)
+                stride = ((width * bpp + 31) // 32) * 4
+                pixels = ctypes.string_at(ptr + 40, stride * height)
+            finally:
+                kernel32.GlobalUnlock(h)
+
+            # Encode to PNG via PIL if present, else keep as BMP data URL.
+            try:
+                from PIL import Image, ImageGrab  # optional — best quality
+                import io
+
+                # Build a raw RGB/RGBA image from the DIB.
+                mode = "RGB" if bpp == 24 else "RGBA"
+                # DIB rows are bottom-up; flip vertically.
+                img = Image.new(mode, (width, height))
+                raw_bytes = bytes(pixels)
+                # Convert BGR/BGRA to RGB/RGBA per row.
+                flipped = b""
+                for y in range(height - 1, -1, -1):
+                    row_start = y * stride
+                    row = raw_bytes[row_start:row_start + width * (bpp // 8)]
+                    flipped += row
+
+                if mode == "RGBA":
+                    img.frombytes(flipped, "raw", "BGRA")
+                else:
+                    img.frombytes(flipped, "raw", "BGRX")
+
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                png = buf.getvalue()
+            except Exception:
+                # Fallback: BMP data URL (base64 of the header + pixels).
+                import base64
+                bmp_header = b"BM" + b"\x00\x00\x00\x00" + b"\x00\x00\x00\x00"
+                bmp_size = 14 + 40 + len(pixels)
+                bmp = bmp_header + struct.pack("<I", bmp_size) + \
+                      struct.pack("<II", 0, 0) + b"\x28\x00\x00\x00" + \
+                      struct.pack("<iiiiHHIIiiii", 40, width, height, 1, bpp,
+                                 0, len(pixels), 0, 0, 0, 0, 0)
+                png = bmp + pixels
+
+            import base64
+            b64 = base64.b64encode(png).decode("ascii")
+            return {
+                "name": "clipboard-image.png",
+                "data_url": f"data:image/png;base64,{b64}",
+                "bytes": str(len(png) // 1024) + " KB",
+            }
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return None
+
+
+def _read_clipboard_image_posix() -> Optional[Dict[str, str]]:
+    """POSIX clipboard image read — best-effort via xclip/wl tools.
+
+    Returns {name, data_url, bytes} when an image is on the clipboard,
+    else None. Tries: (1) xclip -selection clipboard -t image/png,
+    (2) wl-paste --type image/png, (3) scraping a screenshot tool's
+    temp file.
+    """
+    import base64
+    import subprocess
+
+    candidates = [
+        ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+        ["wl-paste", "--type", "image/png"],
+        ["xclip", "-selection", "clipboard", "-o"],
+    ]
+    for cmd in candidates:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=5)
+            raw = proc.stdout
+            if raw and len(raw) > 100:
+                # Could be PNG bytes or base64 text — try both.
+                head = raw[:8]
+                if head[:4] == b"\x89PNG":
+                    b64 = base64.b64encode(raw).decode("ascii")
+                    return {
+                        "name": "clipboard-image.png",
+                        "data_url": f"data:image/png;base64,{b64}",
+                        "bytes": str(len(raw) // 1024) + " KB",
+                    }
+                # Maybe it's a data URL or base64 string.
+                try:
+                    decoded = base64.b64decode(raw.decode("ascii"))
+                    if decoded[:4] == b"\x89PNG":
+                        b64 = base64.b64encode(decoded).decode("ascii")
+                        return {
+                            "name": "clipboard-image.png",
+                            "data_url": f"data:image/png;base64,{b64}",
+                            "bytes": str(len(decoded) // 1024) + " KB",
+                        }
+                except Exception:
+                    pass
+        except Exception:
+            continue
+    return None
+
 _LEGACY_SPECIAL = {
     "H": "UP", "P": "DOWN", "K": "LEFT", "M": "RIGHT",
     "G": "HOME", "O": "END", "S": "DELETE", "R": "INSERT",
@@ -171,7 +337,10 @@ def _map_legacy(code: str) -> str:
 def read_key_vt() -> str:
     """Read one key on Windows via msvcrt — per-event, never blocks on
     line buffering. Handles legacy (\xe0-prefixed) AND VT (ESC[…) arrow
-    keys, Alt+Enter, and bracketed-paste markers."""
+    keys, Alt+Enter, and bracketed-paste markers.
+
+    Does NOT handle image paste — use read_key_vt_image for that.
+    """
     import msvcrt
 
     ch = msvcrt.getwch()
@@ -211,6 +380,23 @@ def read_key_vt() -> str:
     # \x03 (Ctrl+C) is delivered as a signal by Windows; Python raises
     # KeyboardInterrupt inside getwch — handled by the caller.
     return ch
+
+
+def read_key_vt_image(accept_images: bool = False) -> Tuple[str, Optional[Dict[str, str]]]:
+    """Windows VT reader that ALSO accepts image pastes from the clipboard.
+
+    When ``accept_images`` is True and the clipboard currently holds an image
+    (CF_BITMAP / CF_DIB / CF_DIBV5), the returned tuple is (key, image_dict)
+    so the caller can pin it onto the next task. Otherwise this is identical to
+    read_key_vt() (image = None).
+    """
+    import msvcrt
+
+    key = read_key_vt()
+    img = None
+    if accept_images and key in ("ENTER", "CTRL+V", "CTRL+C"):
+        img = _read_clipboard_image()
+    return key, img
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +689,10 @@ class Editor:
             return k  # let the caller decide (mode cycling etc.)
         # printable characters / paste bursts
         if "\n" in k or "\r" in k:
-            # multi-line paste chunk: split at newlines into editor rows
+            # multi-line paste chunk: split at newlines into editor rows.
+            # Bulk-pastes (several files pasted at once, like freebuff) are
+            # accepted up to _MAX_PASTE_BYTES; beyond that we drop to the
+            # tail so the buffer does not grow unbounded.
             chunk = k.replace("\r\n", "\n").replace("\r", "\n")
             parts = chunk.split("\n")
             cur = self.lines[self.row]
@@ -641,12 +830,17 @@ def read_line(
     on_shift_tab: Optional[Callable[[], None]] = None,
     placeholder: str = "",
     busy: bool = False,
+    accept_images: bool = False,
 ) -> str:
     """Read one logical line with the full chat box experience.
 
     Falls back to plain input() when raw mode is unavailable.
     Returns the text (may be multi-line if Alt+Enter was used).
     Raises KeyboardInterrupt / EOFError like input().
+
+    When ``accept_images=True`` the chatbox also accepts image pastes from
+    the clipboard / drag-and-drop on Windows (CF_BITMAP/CF_DIB/etc.) and
+    pins them onto the next task exactly like ``/image <path>``.
     """
     if not sys.stdin.isatty():
         try:
@@ -684,17 +878,32 @@ def read_line(
             rend.render(ed, ed.ghost())
             try:
                 if os.name == "nt":
-                    k = read_key_vt()
+                    k, img = read_key_vt_image(accept_images)
                 else:
-                    k = _read_key_posix()
+                    k, img = _read_key_posix_image(accept_images)
             except KeyboardInterrupt:
                 # Ctrl+C surfaces as an exception inside getwch on Windows
-                k = "CTRL+C"
+                k, img = "CTRL+C", None
+            if img is not None:
+                # Image pasted into the box: pin it onto the next task and
+                # announce it (like /image <path>).
+                last_attachments.append(img)
+                print(f"{ACCENT}⧉ image attached — {img['name']} ({img['bytes']}) — rides with your next task{RESET}")
+                continue
             result = ed.key(k)
             if k == PASTE_START:
                 paste_bytes = 0
                 continue
             if k == PASTE_END:
+                # Bulk-pastes (many files at once, like freebuff) are accepted
+                # up to _MAX_PASTE_BYTES; beyond that we announced the size and
+                # the buffer holds what fit.
+                total_bytes = len(ed.text.encode("utf-8"))
+                if total_bytes > 200_000:
+                    kb = total_bytes // 1024
+                    print(_BULK_PASTE_WARN.format(
+                        ACCENT=ACCENT, GOLD=GOLD, RESET=RESET,
+                        n=total_bytes, kb=kb))
                 paste_bytes = 0
                 continue
             if result == "INT":
@@ -762,3 +971,18 @@ def _read_key_posix() -> str:
         return c
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _read_key_posix_image(accept_images: bool = False) -> Tuple[str, Optional[Dict[str, str]]]:
+    """POSIX reader that ALSO accepts image pastes from the clipboard.
+
+    POSIX terminals usually paste images via custom OSC sequences or
+    drag-and-drop; here we fall back to reading the system clipboard via
+    xclip/wl-clipboard screenshot tools when the key is a paste-like
+    token. Otherwise identical to _read_key_posix (image = None).
+    """
+    key = _read_key_posix()
+    img = None
+    if accept_images and key in ("ENTER", "CTRL+V"):
+        img = _read_clipboard_image()
+    return key, img

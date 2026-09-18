@@ -327,10 +327,48 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception:
             pass
         if "bot" in argv[1:]:
-            # claume bot — the Electron desktop companion app
+            # claume bot / jarvis bot — the Electron desktop companion app.
+            # Jarvis/NVIDIA-NIM invariant: auto-start the local proxy so the
+            # bot can come on live even when the user only opened this one.
+            from . import proxy
+
+            proxy.ensure_keys()
+            try:
+                proxy.start_server()
+            except Exception:
+                pass
             from .commands import _launch_claumebot
 
             _launch_claumebot()
+            return 0
+        if "always-listen" in argv[1:]:
+            # Always-listening + record mode: jarvis follows gestures/pointer
+            # and records you when you say so — NVIDIA NIM only via proxy.
+            from . import proxy
+
+            proxy.ensure_keys()
+            try:
+                proxy.start_server()
+            except Exception:
+                pass
+            from .jarvis import Jarvis
+
+            j = Jarvis()
+            j.set_recording(True)
+            print(f"{GREEN}● jarvis{RESET} {GREY}— always-listening + record mode on (nvidia nim only){RESET}")
+            try:
+                while True:
+                    line = input("jarvis ❯ ").strip()
+                    if line.lower() in ("exit", "quit", "bye", "stop recording", "stop"):
+                        if line.lower() in ("stop recording", "stop"):
+                            j.set_recording(False)
+                            print(f"{GOLD}⚠ recording off{RESET}")
+                            continue
+                        break
+                    if line:
+                        j.ask(line)
+            except (EOFError, KeyboardInterrupt):
+                print()
             return 0
         from .jarvis_app import JarvisApp
 

@@ -491,9 +491,32 @@ def cmd_jarvis(args: List[str]) -> None:
 
         j = Jarvis()
         caps = __import__("claume.jarvis", fromlist=["capability_report"]).capability_report()
-        print(f"{GREEN}● jarvis{RESET} {GREY}— wake: {caps['wake_word']} · stt: {caps['stt']}{RESET}")
+        print(f"{GREEN}● jarvis{RESET} {GREY}— wake: {caps['wake_word']} · stt: {caps['stt']} · provider: {caps.get('provider','nvidia nim')}{RESET}")
         print(f"{GREY}  say '{j.keyword}' then speak · 'exit' quits · answers use your claume provider/key{RESET}")
+        print(f"{GREY}  /jarvis always-listen   → record me mode (gesture + pointer follow){RESET}")
         j.run_forever()
+        return
+    if args and args[0] == "always-listen":
+        from .jarvis import Jarvis
+
+        j = Jarvis()
+        j.set_recording(True)
+        print(f"{GREEN}● jarvis{RESET} {GREY}— always-listening + record mode on{RESET}")
+        print(f"{GREY}  say '{j.keyword}' or type — gestures/pointer are fed to jarvis{RESET}")
+        print(f"{GREY}  say 'stop recording' to turn it off{RESET}")
+        try:
+            while True:
+                line = input("jarvis ❯ ").strip()
+                if line.lower() in ("exit", "quit", "bye", "stop recording", "stop"):
+                    if line.lower() in ("stop recording", "stop"):
+                        j.set_recording(False)
+                        print(f"{GOLD}⚠ recording off{RESET}")
+                        continue
+                    break
+                if line:
+                    j.ask(line)
+        except (EOFError, KeyboardInterrupt):
+            print()
         return
     if args and args[0] == "icon":
         # regenerate the desktop app icon
@@ -527,32 +550,66 @@ def cmd_jarvis(args: List[str]) -> None:
 
 # ---------------------------------------------------------------------------
 def _launch_claumebot() -> None:
-    """Launch the claume bot Electron desktop app (detached from the REPL)."""
+    """Launch the claume bot Electron desktop app (detached from the REPL).
+
+    Hardened launch: tries multiple candidate locations, resolves npm
+    (including npm.cmd on Windows) explicitly, surfaces the real error when
+    start/install fails, and falls back gracefully so `claume jarvis bot`
+    or the /jarvis bot command never silently no-ops.
+    """
     import shutil
     import subprocess as sp
 
-    # 1) packaged app dir shipped with claume, 2) repo checkout next to claume/
+    # 1) packaged app dir shipped inside the claume package,
+    # 2) repo checkout next to claume/ (dev layout),
+    # 3) a claumebot folder anywhere under the workspace root (user space).
     candidates = [
         Path(__file__).resolve().parent / "claumebot",
         Path(__file__).resolve().parent.parent / "claumebot",
     ]
+    # Also probe the current workspace (where claume was invoked) so a user
+    # who cloned the bot next to their project can launch it from there.
+    try:
+        cwd = Path.cwd()
+        if cwd != candidates[0].parent and cwd != candidates[1].parent:
+            candidates.append(cwd / "claumebot")
+            candidates.append(cwd.parent / "claumebot")
+    except Exception:
+        pass
     app_dir = next((c for c in candidates if (c / "package.json").exists()), None)
     if not app_dir:
-        print(f"{RED}✗ claumebot app not found (expected claumebot/ next to the claume package){RESET}")
+        print(f"{RED}✗ claumebot app not found — looked in {', '.join(str(c) for c in candidates)}{RESET}")
+        print(f"{GREY}  expected a claumebot/ folder with package.json next to the claume package {RESET}")
         return
-    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    # npm on Windows ships as npm.cmd/npm.bat — resolve explicitly.
+    npm = shutil.which("npm") or shutil.which("npm.cmd") or shutil.which("npm.bat")
     if not npm:
-        print(f"{RED}✗ npm not found — install Node.js to run claume bot{RESET}")
+        print(f"{RED}✗ npm not found on PATH — install Node.js (with npm) to run claume bot{RESET}")
+        print(f"{GREY}  Node.js download: https://nodejs.org  (choose the LTS build){RESET}")
         return
     has_node_modules = (app_dir / "node_modules").exists()
     print(f"{GREEN}● claume bot{RESET} {GREY}launching the humanoid desktop companion…{RESET}")
+    print(f"{GREY}  app dir: {app_dir}{RESET}")
     cmd = [npm, "start"] if has_node_modules else [npm, "install", "--no-audit", "--no-fund"]
     try:
         if not has_node_modules:
-            print(f"{GREY}  first run: installing electron (~1 min, one time){RESET}")
-            sp.run(cmd, cwd=str(app_dir), check=True, shell=(os.name == "nt"))
+            print(f"{GREY}  first run: installing electron + deps (~1-3 min, one time){RESET}")
+            proc = sp.run(cmd, cwd=str(app_dir), check=True, shell=(os.name == "nt"),
+                          capture_output=True, text=True, timeout=600)
             cmd = [npm, "start"]
         sp.Popen(cmd, cwd=str(app_dir), shell=(os.name == "nt"))
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        print(f"{RED}✗ claume bot install failed (exit {exc.returncode}):{RESET}")
+        if stderr:
+            for line in stderr.splitlines()[:6]:
+                print(f"  {GREY}{line}{RESET}")
+        print(f"{GREY}  fix: open {app_dir}/ in a terminal and run `{npm} start` manually{RESET}")
+        return
+    except FileNotFoundError as exc:
+        print(f"{RED}✗ claume bot failed: {exc}{RESET}")
+        print(f"{GREY}  make sure npm is on PATH and the claumebot folder is intact{RESET}")
+        return
     except Exception as exc:
         print(f"{RED}✗ claume bot failed to start: {exc}{RESET}")
         return
@@ -586,15 +643,28 @@ def cmd_bridge(args: List[str]) -> None:
     out = screenmod.phone_bridge(port=port)
     print(f"{GREEN}● phone bridge{RESET} {GREY}live at{RESET} {MINT}{out['url']}{RESET}")
     scheme = "HTTPS (cast-enabled)" if out.get("https") else "HTTP"
-    print(f"{GREY}  {scheme} · LAN / Bluetooth PAN — phone needs NO internet{RESET}")
-    if out.get("qr_path"):
-        print(f"{ACCENT}  QR: {out['qr_path']}{RESET} {GREY}— scan with your phone camera{RESET}")
+    transport = out.get("transport", "wifi")
+    print(f"{GREY}  {scheme} · transports: WiFi/LAN + Bluetooth PAN · phone needs NO internet{RESET}")
+    if transport == "wifi":
+        print(f"{GREEN}  ● WiFi link active{RESET} {GREY}— both devices on the same network: use the WiFi QR (fast, live mirror){RESET}")
+    else:
+        print(f"{GOLD}  ● no WiFi — falling back to Bluetooth PAN{RESET} {GREY}({out.get('bluetooth_pan_ip') or 'pair the phone first: Windows Settings > Bluetooth > join Personal Area Network'}){RESET}")
+    urls = out.get("urls") or {}
+    if "bluetooth" in urls:
+        print(f"{GREY}  bluetooth url: {urls['bluetooth']}{RESET}")
+    qr_paths = out.get("qr_paths") or {}
+    if qr_paths:
+        print(f"{ACCENT}  WiFi QR: {qr_paths.get('wifi', '—')}{RESET}")
+        if qr_paths.get("bluetooth"):
+            print(f"{ACCENT}  Bluetooth QR: {qr_paths['bluetooth']}{RESET}")
         try:
             import os as _os
 
-            _os.startfile(out["qr_path"])  # pop the QR image on screen
+            _os.startfile(qr_paths.get("wifi") or next(iter(qr_paths.values())))
         except Exception:
             pass
+    else:
+        print(f"{GREY}  QR: {out.get('qr_path', '—')}{RESET} {GREY}— scan with your phone camera{RESET}")
     if out.get("https"):
         print(f"{GREY}  on the phone page:{RESET}")
         print(f"{GREY}    ▶ cast PC screen (live MJPEG) → your phone{RESET}")
@@ -1148,6 +1218,41 @@ def cmd_mascot(ui: "Any") -> None:
     ui.mascot.show(mood="happy", note="eyes follow your mouse 👀")
 
 
+def cmd_mouse(args: Optional[List[str]] = None) -> None:
+    """Toggle pointer/mouse click + drag-copy mode in the terminal.
+
+    In click mode:
+    * click a `… +N more lines` hint → that tool's full output expands in place
+    * drag-select text → lands in the clipboard (pull-copy), announced with a preview
+    * Esc / Enter → exits
+
+    This is the Freebuff-style pointer interactivity for the claume terminal:
+    you can click shown commands / drag to auto-copy, instead of only typing.
+    """
+    ui = getattr(_top_ui(), "ui", None)
+    if ui is None:
+        print(f"{GREY}open the claume terminal first, then /mouse{RESET}")
+        return
+    ui.copy_mode()
+
+
+def _top_ui() -> Any:
+    """Reach the in-memory UI instance from the running claume REPL.
+
+    Used by interactive commands (/mouse, /expand, /copy) that need the UI
+    object but are called from the REPL's command dispatcher, not from
+    inside the agent loop.
+    """
+    import inspect
+    frame = inspect.currentframe()
+    while frame:
+        g = frame.f_globals
+        if "ui" in g and isinstance(g.get("ui"), ui.UI):
+            return g
+        frame = frame.f_back
+    return {}
+
+
 def cmd_projects(args: List[str], agent: "Agent") -> None:
     from . import config as cfgmod
 
@@ -1699,6 +1804,8 @@ def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
         cmd_queue(args, agent)
     elif name == "mascot":
         cmd_mascot(agent.ui)
+    elif name == "mouse":
+        cmd_mouse(args)
     elif name == "frame":
         from . import frame as _frame
 

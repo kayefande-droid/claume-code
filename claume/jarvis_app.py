@@ -15,6 +15,11 @@ pieces and the top jarvis repos on GitHub:
 Runs standalone (`python -m claume.jarvis_app`) or inside claume via
 `/jarvis`. The engine (jarvis.Jarvis) does wake word + STT + LLM + TTS;
 this file only renders and feeds it.
+
+Jarvis uses ONLY the NVIDIA NIM API through the local free-claume proxy.
+On launch the app auto-starts the proxy if it is not already live, so
+jarvis can come on as a bot without the user first running `claume proxy`
+in another terminal.
 """
 from __future__ import annotations
 
@@ -26,7 +31,8 @@ import tkinter as tk
 from typing import Any, Dict, Optional
 
 from . import config
-from .jarvis import Jarvis, capability_report
+from . import proxy
+from .jarvis import Jarvis, capability_report, _ensure_jarvis_proxy
 
 # Palette (echoes claume studio: near-black glass, one accent per state)
 BG = "#0a0e14"
@@ -35,10 +41,13 @@ TEXT = "#c8d3de"
 MUTED = "#5c6b7a"
 
 STATE_COLORS = {
-    "idle": ("#3d7dff", "#0e5bd8"),       # calm blue core
-    "listening": ("#22d3ee", "#0891b2"),  # cyan ripple
-    "thinking": ("#a78bfa", "#7c3aed"),   # violet ring
-    "speaking": ("#fbbf24", "#d97706"),   # amber glow
+    # Arc-reactor command interface (from JARVIS-OS-V.2 DESIGN.md):
+    # near-black blue-tinted environment, cyan = active energy/primary actions,
+    # amber/green/red reserved for semantic states.
+    "idle": ("#00C8FF", "#000C18"),          # primary reactor cyan core on dark surface
+    "listening": ("#00E5FF", "#00080F"),     # energy cyan — active listening
+    "thinking": ("#7C3AED", "#000C18"),      # violet ring — reasoning
+    "speaking": ("#FFB300", "#00080F"),      # amber glow — speaking (semantic warm)
 }
 
 STATE_LINES = {
@@ -48,9 +57,19 @@ STATE_LINES = {
     "speaking": "Speaking…",
 }
 
+# Product identity (from JARVIS-OS-V.2 PRODUCT.md): capable, focused, cinematic.
+# The reactor is the primary identity motif; motion is reserved for meaningful
+# transitions, not continuous decorative movement.
+REACTOR_SIZE = 96
+REACTOR_GLOW_RADIUS = 22
+
 
 class JarvisApp:
     def __init__(self) -> None:
+        # Jarvis only ever runs on NVIDIA NIM through the local proxy.
+        # Auto-start the proxy so the bot can come on without a separate
+        # terminal running `claume proxy` first.
+        _ensure_jarvis_proxy()
         self.cfg = config.Config()
         self.jarvis = Jarvis(speak_replies=bool(self.cfg.get("jarvis_speak_replies", True)))
         self.q: "queue.Queue[Dict[str, str]]" = queue.Queue()
@@ -58,6 +77,7 @@ class JarvisApp:
         self._ripples: list = []
         self._typing_after: Optional[str] = None
         self._drag = {"x": 0, "y": 0}
+        self._recording_button: Optional[tk.Button] = None
 
         self.root = tk.Tk()
         self.root.title("jarvis — claume")
@@ -71,6 +91,16 @@ class JarvisApp:
         self._animate()
         self.root.after(50, self._pump)
         self.root.bind("<Escape>", lambda e: self._close())
+        # Gesture / pointer interactivity: the core is clickable (push-to-talk)
+        # and the panel reports mouse position so the assistant can follow
+        # gestures when recording mode is on.
+        self.root.bind("<Button-1>", self._on_click)
+        self.root.bind("<B1-Motion>", self._on_drag_gesture)
+        self.root.bind("<Motion>", self._on_mouse_move)
+
+        # Always-listening toggle (record me mode) — button flows through
+        # Jarvis.set_recording + Jarvis.set_gesture so the brain sees the cue.
+        self.root.bind("<keys>", self._on_hotkey)
 
     # -- layout -------------------------------------------------------------
     def _center(self, w: int, h: int) -> None:
@@ -115,6 +145,10 @@ class JarvisApp:
                                 bg="#16202e", padx=14, pady=6, cursor="hand2")
         self.mic_btn.pack(side="left")
         self.mic_btn.bind("<Button-1>", lambda e: self._push_to_talk())
+        self.rec_btn = tk.Label(bar, text="⏺  record", font=("Segoe UI", 10), fg=MUTED,
+                                bg=PANEL, padx=10, pady=6, cursor="hand2")
+        self.rec_btn.pack(side="left")
+        self.rec_btn.bind("<Button-1>", lambda e: self._toggle_recording())
         caps = capability_report()
         tk.Label(bar, text=caps["wake_word"].split(" (")[0], font=("Segoe UI", 8),
                  fg=MUTED, bg=PANEL).pack(side="right")
@@ -171,6 +205,44 @@ class JarvisApp:
         self.status.config(fg={"idle": TEXT, "listening": c1, "thinking": c1, "speaking": c1}[state])
         self.root.after(33, self._animate)
 
+    # -- pointer / gesture interactivity (JARVIS-OS-V.2 style) ------------------
+    def _on_click(self, e: Any) -> None:
+        """Click on the reactor core = push-to-talk (wake-less talk)."""
+        if self._reactor_hit(e.x, e.y):
+            self._push_to_talk()
+
+    def _on_drag_gesture(self, e: Any) -> None:
+        """Drag on the core = a gesture cue when recording is on."""
+        if self.jarvis._recording and self._reactor_hit(e.x, e.y):
+            self.jarvis.set_gesture(f"dragged core toward ({e.x},{e.y})")
+
+    def _on_mouse_move(self, e: Any) -> None:
+        """Track mouse position over the reactor so the assistant can follow
+        the pointer when recording mode is active."""
+        if self.jarvis._recording:
+            self.jarvis.set_gesture(f"pointer at ({e.x},{e.y})")
+
+    def _reactor_hit(self, x: float, y: float) -> bool:
+        cx, cy = 150, 150
+        r = REACTOR_SIZE / 2
+        return (x - cx) ** 2 + (y - cy) ** 2 <= r ** 2
+
+    def _push_to_talk(self) -> None:
+        """Push-to-talk: listen once and ask, even without the wake word."""
+        if not self.jarvis.speech.available:
+            return
+        self.jarvis._set_state("listening", "push-to-talk — speak now")
+        heard = self.jarvis.speech.listen_once(timeout=8, phrase_limit=15)
+        if heard:
+            reply = self.jarvis.ask(heard)
+            self._add_transcript(heard, reply)
+        else:
+            self.jarvis._set_state("idle", "")
+
+    def _add_transcript(self, heard: str, reply: str) -> None:
+        self._typewriter(f"you: {heard}")
+        self._typewriter(f"jarvis: {reply}")
+
     # -- engine events (thread-safe via queue) --------------------------------
     def _on_state(self, state: str, detail: str) -> None:
         self.q.put({"state": state, "detail": detail})
@@ -212,9 +284,22 @@ class JarvisApp:
             if heard:
                 self.jarvis.ask(heard)
             else:
-                self.q.put({"state": "idle", "detail": ""})
-                self.q.put({"state": "idle", "detail": ""})
+                self.jarvis._set_state("idle", "")
         threading.Thread(target=work, daemon=True).start()
+
+    def _toggle_recording(self) -> None:
+        """Toggle always-listening + record mode (record me / follow gestures)."""
+        on = not self.jarvis._recording
+        self.jarvis.set_recording(on)
+        self._typewriter(f"system: recording {'on' if on else 'off'}")
+
+    def _on_hotkey(self, e: Any) -> None:
+        """Keyboard shortcut: Space = push-to-talk when not focused on a field;
+        R = toggle recording mode."""
+        if e.char == " " and not (self.input_entry and self.input_entry.focus_get() == self.input_entry):
+            self._push_to_talk()
+        elif e.char.lower() == "r":
+            self._toggle_recording()
 
     def run_background_listener(self) -> None:
         """Wake-word loop on a thread so the window stays responsive."""

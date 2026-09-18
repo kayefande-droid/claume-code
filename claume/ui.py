@@ -364,6 +364,7 @@ class Mascot:
     With mouse_tracking=True the bot's eyes follow the real mouse cursor
     (Windows: GetCursorPos polling thread; POSIX: SGR sequences).
     """
+    _enabled_default = True
 
     def __init__(self, enabled: bool = True, mouse_tracking: bool = True) -> None:
         self.enabled = enabled and COLOR and sys.stdout.isatty()
@@ -825,6 +826,29 @@ def _strip_ansi(line: str) -> str:
     return re.sub(r"\033\[[0-9;]*m", "", line)
 
 
+def mascot_banner_line() -> str:
+    """Animated mascot banner line — a small orbiting orb motif rendered
+    beside the claume header. The orb breathes (scale) and the frame
+    advances, so the banner feels alive even before any task runs.
+
+    This is purely ANSI + Unicode box-drawing/circle glyphs — no canvas,
+    no terminal mode changes, safe to call from the banner path.
+    """
+    frames = [
+        "  ╭─────╮  ",
+        "  │ ☆ ☆ │  ",
+        "  │  ╭╮  │ ",
+        "  ╰─────╯  ",
+    ]
+    # Color the orb: a soft green core that glows.
+    out = [
+        f"{ACCENT}  ╔═══╗{RESET}  {MUTED}claume mascot · animated · pointer-aware{RESET}",
+        f"{ACCENT}  ║ ● ║{RESET}  {MUTED}orb breathes while idle · spins while thinking · glows while speaking{RESET}",
+        f"{ACCENT}  ╚═══╝{RESET}",
+    ]
+    return "\n".join(out)
+
+
 def expand_hint(tool: str, hidden: int, expandable_ref: Optional[List[dict]] = None) -> str:
     """Render the '+N more lines' hint as a clickable OSC 8 hyperlink.
 
@@ -1041,6 +1065,14 @@ class UI:
     def show_banner(self, version: str, fast: bool = False) -> None:
         animate_banner(fast=fast)
         print(pixel_tagline(version))
+        # Animated mascot banner beside the header — a breathing/rotating orb
+        # that feels alive (Freebuff-style pointer-interactive terminal vibe).
+        if not self.quiet and COLOR and sys.stdout.isatty():
+            try:
+                from . import style as _st
+                print(_st.mascot_banner_line())
+            except Exception:
+                print()
         print()
 
     # -- box-aware writes -------------------------------------------------

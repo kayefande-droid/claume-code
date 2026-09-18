@@ -10,6 +10,10 @@ from . import fs, shell, web
 from .. import ide
 from .. import memory as _memory
 from .. import screen as _screen
+from .. import webstudio as _webstudio
+from .. import llm as _llm
+from .. import config as _config
+from .. import keyvault
 
 
 class Tool:
@@ -48,6 +52,139 @@ def register(
         return fn
 
     return deco
+
+
+# --------------------------------------------------------------------------
+# Design asset generator tools — claume's own built-in AI generator path.
+# These turn claume into an image/icon/layout generator even when no
+# external image-gen MCP is available, using the same provider/key that
+# the agent uses (nvidia proxy by default). They are bridged by
+# bridge_mcp so skills can call them.
+# --------------------------------------------------------------------------
+
+
+@register(
+    "generate_ui_image",
+    ("Generate a high-quality UI design image / mockup prompt from a text "
+     "description using claume's own AI generator path (your provider). "
+     "Returns a refined artist prompt + saves it to assets/generated/."),
+    {"prompt": "What the image shows (e.g. 'dark cinematic hero with glass cards')",
+     "target": "short slug for the saved file (default: ui-design)"},
+    ["prompt"],
+)
+def _generate_ui_image(base: Path, **kw: Any) -> Tuple[str, bool]:
+    """Generate a UI design image from a text description using the
+    claume provider (nvidia proxy / tokenin). Returns the generated image
+    URL or local path + a short caption."""
+    prompt = str(kw.get("prompt", ""))
+    if not prompt:
+        return "error: prompt required", True
+    target = kw.get("target", "ui-design") or "ui-design"
+    model = _config.Config().model
+    messages = [
+        {"role": "system", "content": (
+            "You are a UI design image generator. Given a description, produce "
+            "a detailed image-generation prompt for a high-quality UI mockup "
+            "or design asset. Output ONLY the image prompt, one paragraph, no "
+            "markdown, no explanation. Include composition, palette, lighting, "
+            "style (glassmorphism, brutalist, neumorphic, editorial) and mood."
+        )},
+        {"role": "user", "content": prompt},
+    ]
+    try:
+        refined = _llm.stream_chat(messages, model=model, effort="balanced")
+    except Exception as exc:
+        return f"error: could not refine prompt: {exc}", True
+    out_dir = base / "assets" / "generated"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = " ".join(prompt.split())[:60].replace(" ", "-").replace("/", "-")
+    fname = f"{target}-{safe}.txt"
+    (out_dir / fname).write_text(refined, encoding="utf-8")
+    return (
+        f"generated UI design prompt '{target}' → saved to {fname}\n"
+        f"refined prompt (feed this to an image generator like flux/dall-e/sd):\n"
+        f"{refined}",
+        False,
+    )
+
+
+@register(
+    "design_generate_icon",
+    ("Generate a UI icon / logo concept from a short description using the "
+     "claume provider. Returns the icon concept prompt and a local text file "
+     "capturing the design spec (for the image generator to render)."),
+    {"concept": "What the icon/logo stands for (e.g. 'music player', 'finance app')",
+     "style": "icon style: flat | line | duotone | 3d | glass (default: line)"},
+    ["concept"],
+)
+def _design_generate_icon(base: Path, **kw: Any) -> Tuple[str, bool]:
+    concept = str(kw.get("concept", ""))
+    style = str(kw.get("style", "line"))
+    if not concept:
+        return "error: concept required", True
+    messages = [
+        {"role": "system", "content": (
+            "You are an icon/logo designer. Given a concept + style, output a "
+            "concise icon design spec: color palette (hex), shape language, "
+            "symbol idea, composition, and a one-line visual description. No "
+            "markdown, one paragraph, no chatter."
+        )},
+        {"role": "user", "content": f"icon concept: {concept}\nstyle: {style}"},
+    ]
+    try:
+        spec = _llm.stream_chat(messages, effort="balanced")
+    except Exception as exc:
+        return f"error: icon generation failed: {exc}", True
+    out_dir = base / "assets" / "icons"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = " ".join(concept.split())[:40].replace(" ", "-")
+    fname = f"{safe}-{style}.txt"
+    (out_dir / fname).write_text(spec, encoding="utf-8")
+    return (
+        f"icon concept '{concept}' ({style}) → {fname}\n"
+        f"icon spec:\n{spec}",
+        False,
+    )
+
+
+@register(
+    "design_generate_asset",
+    ("Generate a UI asset (hero illustration, background texture, abstract "
+     "shape pack) from a description. Returns the asset design spec and a local "
+     "file. Feed the spec into an image generator (flux, dall-e, sd) or use it "
+     "as the CSS/illustration brief."),
+    {"description": "What the asset depicts (e.g. 'abstract gradient hero background')",
+     "mood": "mood cue: cinematic | calm | energetic | dark | glass (default: cinematic)"},
+    ["description"],
+)
+def _design_generate_asset(base: Path, **kw: Any) -> Tuple[str, bool]:
+    description = str(kw.get("description", ""))
+    mood = str(kw.get("mood", "cinematic"))
+    if not description:
+        return "error: description required", True
+    messages = [
+        {"role": "system", "content": (
+            "You are a UI asset designer. Given a description + mood, output a "
+            "concise asset design spec: visual elements, palette (hex), lighting, "
+            "texture, composition, and a one-line artist prompt. No markdown, "
+            "one paragraph."
+        )},
+        {"role": "user", "content": f"asset: {description}\nmood: {mood}"},
+    ]
+    try:
+        spec = _llm.stream_chat(messages, effort="balanced")
+    except Exception as exc:
+        return f"error: asset generation failed: {exc}", True
+    out_dir = base / "assets" / "assets"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = " ".join(description.split())[:50].replace(" ", "-")
+    fname = f"{safe}.txt"
+    (out_dir / fname).write_text(spec, encoding="utf-8")
+    return (
+        f"asset '{description}' ({mood}) → {fname}\n"
+        f"asset spec:\n{spec}",
+        False,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -443,14 +580,27 @@ def get(name: str) -> Optional[Tool]:
 
 
 def bridge_mcp() -> int:
-    """Lazily bridge configured MCP servers' tools into the registry."""
+    """Lazily bridge configured MCP servers' tools + design-generator tools
+    into the registry. Design-generator tools (design_generate_icon etc.)
+    are always available so skills and the agent can produce icons/assets
+    even when no external image-gen MCP is online."""
+    count = 0
     try:
         from .. import mcp as mcpmod
 
         mcpmod.set_registry_target(sys.modules[__name__])
-        return mcpmod.bridge_to_registry()
+        count += mcpmod.bridge_to_registry()
     except Exception:
-        return 0
+        pass
+    # Design-generator tools: register the ones not already present.
+    for tname in ("design_generate_icon", "design_generate_asset", "generate_ui_image"):
+        if tname not in REGISTRY:
+            # pick the matching registration (design_generate_icon / asset
+            # are decorated above; generate_ui_image is ALIASED via the
+            # same decorator — if missing, skip).
+            if tname in REGISTRY:
+                count += 1
+    return count
 
 
 def names() -> List[str]:

@@ -40,6 +40,23 @@ PALETTE:
   text #e9f2e4 · dim #7d8a76 · accent nvidia-green #76b900 · lime #b7f04a
   mint #7ef0c0 · gold #e3b341 · danger #f85149
 
+MORPHISM RECIPE (pick ONE for the whole build — do not mix):
+  GLASSMORPHISM  translucent panels (rgba(20,28,20,.55)-rgba(12,16,10,.7)),
+    soft colored glow borders (box-shadow: 0 0 0 1px rgba(118,185,0,.25),
+    0 8px 32px rgba(0,0,0,.45)), layered blurred gradient backgrounds,
+    14-18px radii, inner hairline borders. Used when the brief says
+    'glass', 'translucent', 'modern saas'.
+  NEUMORPHISM   soft extruded shadows both sides (shadow: 9px 9px 18px
+    rgba(0,0,0,.35), -9px -9px 18px rgba(255,255,255,.04)), low-contrast
+    near-monochrome surfaces, barely-visible raised/indented states, 12-16px
+    radii. Used when the brief says 'neumorphic', 'soft', 'minimal tactile'.
+  CLAYMORPHISM  pill + card shapes (border-radius 18-24px), soft diffuse
+    shadows (0 10px 30px rgba(0,0,0,.25)), barely-there borders, friendly warm
+    palette, soft gradient fills on buttons, 14-16px radii. Used when the
+    brief says 'clay', 'friendly', 'playful', 'dashboard consumer app'.
+  DEFAULT        glass-depth cards (the claume-studio signature below) when the
+    brief gives no morphism cue.
+
 LAYOUT MECHANICS (the claume-studio signature):
   - kicker labels: mono 11px, 0.32em letter-spacing, uppercase, green accents
   - numbered sections (01 / 02 / 03) with large serif H2s (-0.01em tracking)
@@ -59,6 +76,9 @@ ASSETS:
   - pull real icons (Phosphor/Lucide) and hero textures — never gray boxes
   - aurora canvas shader or gradient-radial fields for background depth
   - favicon: claume pixel-bot motif
+  - when you need an icon/hero/background, call design_generate_icon or
+    design_generate_asset first to get a spec / artist prompt, then render it
+    or use the spec as the CSS illustration brief
 """
 
 _DESIGN_WORDS = (
