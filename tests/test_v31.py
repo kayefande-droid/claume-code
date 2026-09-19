@@ -143,28 +143,25 @@ class TestJarvisShaping(unittest.TestCase):
 
 
 class TestProvider(_IsolatedHome):
-    def test_tokenin_provider_registered(self):
+    def test_nvidia_provider_registered(self):
         from claume import llm
 
-        self.assertEqual(llm.PROVIDER_ENDPOINTS["tokenin"], "https://tokenin.my.id/v1")
-        self.assertEqual(llm.PROVIDER_KEY_ENV["tokenin"], "TOKENIN_API_KEY")
-        self.assertIn("myt/claude-fable-5", llm.TOKENIN_MODELS)
+        self.assertEqual(llm.PROVIDER_ENDPOINTS["nvidia"], "http://127.0.0.1:8000/v1")
+        self.assertEqual(llm.PROVIDER_KEY_ENV["nvidia"], "NVIDIA_API_KEY")
+        self.assertNotIn("tokenin", llm.PROVIDER_ENDPOINTS)
 
-    def test_default_provider_is_tokenin(self):
+    def test_default_provider_is_nvidia(self):
         from claume import config
 
         cfg = config.Config()
-        self.assertEqual(cfg.get("provider"), "tokenin")
+        self.assertEqual(cfg.get("provider"), "nvidia")
 
-    def test_bootstrap_seeds_key_once(self):
-        from claume import bootstrap, keyvault
+    def test_bootstrap_seeds_nothing(self):
+        from claume import bootstrap
 
-        seeded = bootstrap.seed_builtin_keys()
-        self.assertEqual(seeded, ["TOKENIN_API_KEY"])
-        # simulate the user setting their own key, then re-seed: preserved
-        keyvault.set_key("TOKENIN_API_KEY", "user-own-key")
+        # NVIDIA-only: no built-in keys ship anymore.
         self.assertEqual(bootstrap.seed_builtin_keys(), [])
-        self.assertEqual(keyvault.get_key("TOKENIN_API_KEY"), "user-own-key")
+        self.assertEqual(bootstrap.BUILTIN_KEYS, {})
 
 
 class TestScreenCapture(_IsolatedHome):

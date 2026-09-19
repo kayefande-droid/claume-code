@@ -9,20 +9,20 @@
  ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝
 ```
 
-**claume-code v3.2** is a pixel-animated **desktop CLI coding agent** by
+**claume-code v3.4** is a pixel-animated **desktop CLI coding agent** by
 **kayefande-droid** (not a web app) that builds full projects from
-natural-language prompts — inspired by Claude Code, powered by a **free
-model pool** (tokenin by default, key built in — NVIDIA NIM also supported
-through the **free-claume proxy**). claume always identifies as
+natural-language prompts — inspired by Claude Code, powered by **NVIDIA
+NIM** through the **free-claume proxy** (one free key from
+build.nvidia.com). claume always identifies as
 **claume** — never Claude, never ChatGPT.
 
-**v3.2 highlights:** 🤖 **claume bot** — a full Electron desktop companion:
+**v3.4 highlights:** 🤖 **claume bot** — a full Electron desktop companion:
 3D point-cloud humanoid avatar (Three.js plexus + GLSL drift), live camera
 vision, real STT/TTS, knows its master by name · 📱 **two-way phone
-bridge** — live screen cast PC↔phone over QR/LAN/Bluetooth PAN, plus
-file transfer, zero internet · 🧠 **Fable-5 reasoning ALWAYS ACTIVE** on
+bridge** — live screen cast PC↔phone over QR/WiFi/Bluetooth PAN, plus
+file transfer, zero internet · 🧠 **NVIDIA NIM reasoning** on
 every surface (agent, subagents, jarvis, bot) · 🎙 **jarvis** wake-word
-assistant · 👁 **screen vision** · 🔑 **tokenin provider built in**
+assistant · 👁 **screen vision** · 🔑 **NVIDIA NIM only — no third-party key pools**
 
 > a **kayefande-droid** product — designed, built and maintained by
 > [github.com/kayefande-droid](https://github.com/kayefande-droid)
@@ -91,6 +91,29 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 ```powershell
 irm https://raw.githubusercontent.com/kayefande-droid/claume-code/main/install.ps1 | iex
+```
+
+**Option C — pip straight from git (latest main, any platform):**
+
+```powershell
+pip install --force-reinstall --no-cache-dir git+https://github.com/kayefande-droid/claume-code.git
+```
+
+### Update after every git push
+
+The installers are idempotent — re-running them after any push replaces the
+app while keeping your config, vault, sessions and skills. Or use the
+updaters, which pull `main` and reinstall in one step:
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/kayefande-droid/claume-code/main/update.ps1 | iex
+
+# Linux / macOS / WSL
+curl -fsSL https://raw.githubusercontent.com/kayefande-droid/claume-code/main/update.sh | bash
+
+# pip from git, any platform
+pip install --force-reinstall --no-cache-dir git+https://github.com/kayefande-droid/claume-code.git
 ```
 
 ### Linux / macOS (and WSL)
@@ -329,8 +352,8 @@ jarvis               ← its own command (claude-style shortcut, works anywhere)
 * **Human-like UI** — an arc-reactor core that breathes (idle), ripples
   (listening), spins (thinking) and glows amber (speaking); typewriter
   transcript; drag-anywhere frameless window; zero dependencies (tkinter).
-* **Same brain** — replies go through YOUR claume provider/key (tokenin by
-  default); no separate API key for the assistant.
+* **Same brain** — replies go through YOUR claume provider/key (NVIDIA NIM
+  via the proxy); no separate API key for the assistant.
 
 ### The terminal experience (unchanged from v2, verified across IDEs)
 

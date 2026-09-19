@@ -19,12 +19,10 @@ from . import config, keyvault
 _SSL_CTX = ssl.create_default_context()
 
 # Well-known OpenAI-compatible public endpoints ("live space" providers).
+# claume runs NVIDIA NIM through the local free-claume proxy by default —
+# jarvis/claume both go through it so one NVIDIA_API_KEY powers everything.
 PROVIDER_ENDPOINTS: Dict[str, str] = {
     "nvidia": "http://127.0.0.1:8000/v1",  # local free-claume proxy
-    # tokenin: free community model pool, OpenAI-compatible, no card needed.
-    # Key ships built-in (bootstrap.seed_builtin_keys) — override anytime:
-    #   /key TOKENIN_API_KEY
-    "tokenin": "https://tokenin.my.id/v1",
     "groq": "https://api.groq.com/openai/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "together": "https://api.together.xyz/v1",
@@ -36,7 +34,6 @@ PROVIDER_ENDPOINTS: Dict[str, str] = {
 
 PROVIDER_KEY_ENV: Dict[str, str] = {
     "nvidia": "NVIDIA_API_KEY",
-    "tokenin": "TOKENIN_API_KEY",
     "groq": "GROQ_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "together": "TOGETHER_API_KEY",
@@ -47,24 +44,9 @@ PROVIDER_KEY_ENV: Dict[str, str] = {
 }
 
 
-# tokenin model pool (allowed for shipped keys — leads with claude-fable-5
-# to match claume's always-active Fable-5 reasoning protocol; the chain
-# rotates automatically on 429/5xx so a turn always survives).
-TOKENIN_MODELS = [
-    "myt/claude-fable-5",
-    "myt/gpt-5-mini",
-    "myt/claude-haiku-4-5",
-    "myt/glm-5.3-flash",
-    "myt/qwen3.8-flash",
-    "myt/gemini-3.8-flash",
-    "myt/claude-fable-5-1",
-]
-
 # Provider-scoped fallback chains: applied on top of the primary model so
 # switching providers never carries foreign model names across.
-PROVIDER_MODEL_CHAINS: Dict[str, List[str]] = {
-    "tokenin": TOKENIN_MODELS,
-}
+PROVIDER_MODEL_CHAINS: Dict[str, List[str]] = {}
 
 
 class LLMError(Exception):
@@ -95,15 +77,15 @@ def _friendly_http_error(code: int, detail: str) -> str:
         )
     if code == 401:
         return (
-            f"invalid API key (401): {short} — run /key for the active provider "
-            "(e.g. /key TOKENIN_API_KEY, /key NVIDIA_API_KEY) or set it in the admin UI"
+            f"invalid API key (401): {short} — run /key NVIDIA_API_KEY <key> "
+            "or set it in the admin UI"
         )
     if code == 429:
         return f"rate limited (429): {short} — add another key (NVIDIA_API_KEY_2) or retry"
     if code == 402 or "saldo" in low or "insufficient_balance" in low:
         return (
-            f"provider balance empty (402): {short} — top up at tokenin.my.id "
-            "or run /key to switch providers"
+            f"provider balance/credits empty (402): {short} — run /key to update "
+            "the NVIDIA NIM key"
         )
     return f"LLM HTTP {code}: {short}"
 
@@ -147,8 +129,7 @@ def stream_chat(
         fb = str(fb).strip()
         if fb and fb not in model_chain:
             model_chain.append(fb)
-    # Provider-scoped chain (e.g. tokenin's 7 free models) — only models
-    # native to this provider join the chain.
+    # Provider-scoped chain — only models native to this provider join the chain.
     for fb in PROVIDER_MODEL_CHAINS.get(provider, []):
         fb = str(fb).strip()
         if fb and fb not in model_chain:

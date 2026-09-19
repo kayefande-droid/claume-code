@@ -13,6 +13,10 @@ import json
 import os
 import shutil
 import subprocess
+
+# Module-level indirection so tests can patch the MCP spawn without mutating
+# the shared global subprocess module (which leaks into other tests' threads).
+Popen = subprocess.Popen
 import threading
 import uuid
 from pathlib import Path
@@ -249,7 +253,7 @@ class MCPServer:
             except Exception:
                 pass
         try:
-            self._proc = subprocess.Popen(
+            self._proc = Popen(
                 cmd_list,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -568,7 +572,7 @@ def design_pipeline(request: str, workspace: Path) -> Tuple[str, bool]:
                 # Ensure the server process is up before we probe tool names
                 # (get_server starts + initializes lazily; call it once).
                 srv = get_server(server)
-                if not srv._warmed:
+                if not getattr(srv, "_warmed", True):
                     try:
                         srv.initialize()
                     except MCPError:

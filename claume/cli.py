@@ -42,14 +42,12 @@ def _first_run_setup() -> None:
     config.claume_dir().mkdir(parents=True, exist_ok=True)
     config.skills_dir().mkdir(parents=True, exist_ok=True)
     config.sessions_dir().mkdir(parents=True, exist_ok=True)
-    # Built-in free keys (tokenin community key) — vaulted, never hardcoded
-    # into requests; users override with /key TOKENIN_API_KEY.
+    # No built-in keys — NVIDIA NIM only. The interactive setup below asks
+    # for the free NVIDIA key (build.nvidia.com) on first run.
     try:
         from . import bootstrap
 
-        seeded = bootstrap.seed_builtin_keys()
-        if seeded:
-            print(f"{_ui.GREY}  vaulted built-in keys: {', '.join(seeded)} (free tokenin pool — override with /key){RESET}")
+        bootstrap.seed_builtin_keys()
     except Exception:
         pass
     # Ask for NVIDIA key (free tier) — interactive terminals only
@@ -157,8 +155,7 @@ def _print_context_line(workspace: Path) -> None:
             print(f"{_ui.GREY}  model{RESET} {_ui.MINT}{cfg.model}{RESET}")
     else:
         prov = str(cfg.get('provider'))
-        note = " · free pool, key built-in" if prov == "tokenin" else ""
-        print(f"{_ui.GREY}  provider{RESET} {_ui.MINT}{prov}{RESET} {_ui.GREY}· model{RESET} {_ui.MINT}{cfg.model}{RESET}{_ui.GREY}{note}{RESET}")
+        print(f"{_ui.GREY}  provider{RESET} {_ui.MINT}{prov}{RESET} {_ui.GREY}· model{RESET} {_ui.MINT}{cfg.model}{RESET}")
     print(f"{_ui.GREY}  workspace{RESET} {_ui.MINT}{workspace}{RESET}")
     print(f"{_ui.GREY}  {uimod.mode_chip(cfg.mode)} {_ui.GREY}· /help commands · type while a task runs (queued) · /ask · /skip · /exit{RESET}\n")
 
@@ -313,6 +310,44 @@ def _make_worker(agent: Agent, ui: UI, task_queue: "queue.Queue", box_state: dic
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
+    # Subcommand: claume update  ->  pull latest main + force-reinstall
+    if argv and argv[0] == "update":
+        import shutil as _sh
+        import subprocess as _sp
+
+        app = Path(__file__).resolve().parent
+        repo_root = app.parent
+        print(f"{GREY}updating claume-code…{RESET}")
+        updated_repo = False
+        # If this install is a git checkout, pull the latest main first.
+        if (repo_root / ".git").is_dir():
+            try:
+                _sp.run(["git", "-C", str(repo_root), "fetch", "origin", "main"], check=False,
+                         stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, stdin=_sp.DEVNULL)
+                _sp.run(["git", "-C", str(repo_root), "reset", "--hard", "origin/main"], check=False,
+                         stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, stdin=_sp.DEVNULL)
+                updated_repo = True
+                print(f"{MINT}✔{RESET} {GREY}git: pulled latest main{RESET}")
+            except Exception:
+                pass
+        # Force-reinstall from git so pip sees a fresh build every time.
+        pip_exe = _sh.which("pip") or [sys.executable, "-m", "pip"]
+        cmd = ([pip_exe] if isinstance(pip_exe, str) else pip_exe) + \
+              ["install", "--quiet", "--force-reinstall", "--no-cache-dir",
+               "git+https://github.com/kayefande-droid/claume-code.git"]
+        try:
+            r = _sp.run(cmd)
+            if r.returncode == 0:
+                src = f"{GREY} (git + pip){RESET}" if updated_repo else f"{GREY} (pip from git){RESET}"
+                print(f"{GREEN}✔ claume updated{RESET}{src} — restart the REPL to pick it up")
+                return 0
+            print(f"{GOLD}⚠ pip update failed (exit {r.returncode}) — try: "
+                  f"pip install --force-reinstall --no-cache-dir git+https://github.com/kayefande-droid/claume-code.git{RESET}")
+            return r.returncode or 1
+        except FileNotFoundError:
+            print(f"{GOLD}⚠ pip not found on PATH{RESET}")
+            return 1
+
     # Subcommand: claume proxy [--verbose]  ->  foreground proxy server
     if argv and argv[0] == "proxy":
         return proxy.serve_foreground(verbose="--verbose" in argv)
@@ -387,6 +422,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("  claume --continue   resume the most recent session")
         print("  claume --resume     pick a session to resume")
         print("  claume proxy        run the free-claume proxy in the foreground")
+        print("  claume update       pull latest main + reinstall (pip from git)")
         return 0
 
     _apply_saved_theme()
@@ -404,8 +440,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     _ensure_nvidia_key_interactive()
     _start_proxy_if_needed()
 
-    # v3: seed the built-in tokenin key into existing installs too (idempotent,
-    # never overwrites a user-set key), so the default provider just works.
+    # NVIDIA-only: no built-in keys to seed (kept as a no-op call for
+    # backwards compatibility with existing installs).
     try:
         from . import bootstrap as _bootstrap
 

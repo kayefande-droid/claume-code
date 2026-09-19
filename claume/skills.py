@@ -453,15 +453,29 @@ def run_script(name: str, script_hint: str, args: List[str], timeout: int = 180)
     else:
         cmd = [str(script)]
     try:
-        proc = subprocess.run(
-            cmd + list(args),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(d),
-            encoding="utf-8",
-            errors="replace",
-        )
+        proc = None
+        last_exc: Optional[Exception] = None
+        # Windows can transiently fail process spawn (WinError 50/21/233,
+        # desktop-heap races with background threads) — retry with backoff.
+        for attempt in range(5):
+            try:
+                proc = subprocess.run(
+                    cmd + list(args),
+                    capture_output=True,
+                    stdin=subprocess.DEVNULL,  # never inherit the (possibly
+                    # redirected/broken) terminal stdin handle on Windows
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(d),
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                break
+            except OSError as exc:
+                last_exc = exc
+                time.sleep(0.3 * (attempt + 1))
+        if proc is None:
+            raise last_exc if last_exc else RuntimeError("spawn failed")
         out = (proc.stdout or "").strip()
         err = (proc.stderr or "").strip()
         text = out if out else err

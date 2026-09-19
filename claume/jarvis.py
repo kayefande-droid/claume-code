@@ -1,8 +1,8 @@
 """claume jarvis — desktop voice assistant engine (v3).
 
 Jarvis is a bundled PLUGIN (see skills/PLUGINS.md): a wake-word voice
-assistant that answers through the SAME provider/key as claume (tokenin
-by default — vault key TOKENIN_API_KEY), speaks replies aloud, and ships
+assistant that answers through the SAME provider/key as claume (NVIDIA NIM
+by default — vault key NVIDIA_API_KEY), speaks replies aloud, and ships
 a human-like desktop UI (jarvis_app.py).
 
 Voice behavior is transposed from the leaked Claude voice-mode system

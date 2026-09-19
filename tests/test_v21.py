@@ -140,7 +140,7 @@ class TestSkillsManager(_IsolatedConfigMixin, unittest.TestCase):
 
         self._make_skill("scr", with_scripts=True)
         out, is_err = sk.run_script("scr", "helper.py", [])
-        self.assertFalse(is_err)
+        self.assertFalse(is_err, f"run_script failed with output: {out[:300]}")
         self.assertIn("hi", out)
 
     def test_run_script_missing(self):

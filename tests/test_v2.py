@@ -331,7 +331,7 @@ class TestMCPVaultKeyInjection(_IsolatedConfigMixin, unittest.TestCase):
             captured["cmd"] = cmd_list
             return FakeProc()
 
-        with patch.object(mcp.subprocess, "Popen", fake_popen):
+        with patch.object(mcp, "Popen", fake_popen):
             srv._start()
 
         self.assertEqual(captured["env"].get("TEST_MCP_KEY"), "test-secret-123456")
@@ -359,7 +359,7 @@ class TestMCPVaultKeyInjection(_IsolatedConfigMixin, unittest.TestCase):
             captured["env"] = kwargs.get("env", {})
             return FakeProc()
 
-        with patch.object(mcp.subprocess, "Popen", fake_popen):
+        with patch.object(mcp, "Popen", fake_popen):
             srv._start()
 
         self.assertNotIn("API_KEY_21ST", captured["env"])
@@ -463,7 +463,7 @@ class TestLLMFallbackChain(_IsolatedConfigMixin, unittest.TestCase):
                 with self.assertRaises(llm.LLMError):
                     llm.stream_chat([{"role": "user", "content": "hi"}])
             # primary + 2 fallbacks must come FIRST; provider-scoped chains
-            # (tokenin's free pool) follow them by design.
+            # (if any) follow them by design.
             self.assertEqual(captured["models"][:3], [cfg.model, "m/b", "m/c"])
             self.assertGreaterEqual(len(captured["models"]), 3)
         finally:

@@ -94,10 +94,9 @@ class Config:
     """JSON-backed settings store with dot-key access."""
 
     DEFAULTS: Dict[str, Any] = {
-        # v3: tokenin is the default free provider (OpenAI-compatible,
-        # community pool with 7 free models — see llm.TOKENIN_MODELS).
-        "provider": "tokenin",
-        "model": "myt/glm-5.3-free",
+        # claume runs on NVIDIA NIM through the local free-claume proxy.
+        "provider": "nvidia",
+        "model": "nvidia/nemotron-3-super-120b-a12b",
         "model_fallbacks": [],
         # effort: fast | balanced | deep | ultra (drives step budgets + tokens)
         "effort": "balanced",

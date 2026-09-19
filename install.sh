@@ -82,8 +82,10 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 PY_BIN="$VENV_DIR/bin/python"
 "$PY_BIN" -m pip install --quiet --upgrade pip
-"$PY_BIN" -m pip install --quiet "$APP_DIR"
-echo "[OK] dependencies installed (stdlib-only - nothing heavy)"
+# --force-reinstall --no-deps: ALWAYS replaces the installed copy even when
+# the version number is unchanged (idempotent updates after every git push).
+"$PY_BIN" -m pip install --quiet --force-reinstall --no-deps --no-cache-dir "$APP_DIR"
+echo "[OK] claume-code $($("$PY_BIN" -m pip show claume-code 2>/dev/null | grep '^Version') )installed (stdlib-only - nothing heavy)"
 
 # ---------------------------------------------------------------- shim
 mkdir -p "$BIN_DIR"

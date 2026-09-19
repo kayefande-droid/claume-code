@@ -74,7 +74,7 @@ def register(
 )
 def _generate_ui_image(base: Path, **kw: Any) -> Tuple[str, bool]:
     """Generate a UI design image from a text description using the
-    claume provider (nvidia proxy / tokenin). Returns the generated image
+    claume provider (NVIDIA NIM via the local proxy). Returns the generated image
     URL or local path + a short caption."""
     prompt = str(kw.get("prompt", ""))
     if not prompt:

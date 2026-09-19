@@ -11,7 +11,15 @@ MAX_READ_BYTES = 200_000
 
 
 def _resolve(base: Path, path_str: str) -> Path:
-    p = Path(path_str)
+    s = str(path_str).strip().strip('"').strip("'")
+    # Git-Bash/MSYS-style paths the model sometimes emits (/c/Users/...,
+    # /mnt/c/Users/... on WSL) — rewrite to native Windows form.
+    import re as _re
+
+    m = _re.match(r"^/(?:mnt/)?([a-zA-Z])/(.*)$", s)
+    if m and os.name == "nt":
+        s = f"{m.group(1).upper()}:/{m.group(2)}"
+    p = Path(s)
     if not p.is_absolute():
         p = base / p
     return p.resolve()

@@ -107,9 +107,12 @@ if (-not (Test-Path $VenvDir)) {
 $pyExe = Join-Path $VenvDir "Scripts\python.exe"
 & $pyExe -m pip install --quiet --upgrade pip
 if ($LASTEXITCODE -ne 0) { Write-Host "X pip upgrade failed" -ForegroundColor Red; exit 1 }
-& $pyExe -m pip install --quiet $AppDir
+# --force-reinstall --no-deps: ALWAYS replaces the installed copy even when
+# the version number is unchanged (idempotent updates after every git push).
+& $pyExe -m pip install --quiet --force-reinstall --no-deps --no-cache-dir $AppDir
 if ($LASTEXITCODE -ne 0) { Write-Host "X package install failed" -ForegroundColor Red; exit 1 }
-Write-Host "[OK] dependencies installed (stdlib-only - nothing heavy)" -ForegroundColor Green
+$installedVer = (& $pyExe -m pip show claume-code 2>$null | Select-String "^Version").ToString()
+Write-Host "[OK] claume-code $installedVer installed (stdlib-only - nothing heavy)" -ForegroundColor Green
 
 # ---------------------------------------------------------------- shims
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
