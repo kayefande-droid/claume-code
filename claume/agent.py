@@ -305,18 +305,38 @@ class Agent:
             # --- parse the envelope ------------------------------------
             turn = parser.parse_turn(reply)
             if turn.error:
+                # Salvage path: small models sometimes drift out of the JSON
+                # envelope and just stream prose/code (e.g. after a big design
+                # report injection). If the reply carries no envelope keys at
+                # all, it is not a broken tool call — surface it as the final
+                # answer instead of punishing the user with a paused turn.
+                has_envelope_hints = any(
+                    h in reply for h in ('"tool"', '"action"', '"final"', '"thought"')
+                )
+                if not has_envelope_hints and reply.strip():
+                    self._fail_streak = 0
+                    self.history.append({"role": "assistant", "content": reply[:4000]})
+                    self.ui.render_warning(
+                        "model replied outside the JSON envelope — showing it as-is "
+                        "(try /effort deep or /model for stricter output)"
+                    )
+                    final_text = reply.strip()
+                    break
                 self._fail_streak += 1
                 self.history.append({"role": "assistant", "content": reply[:4000]})
-                self.history.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "SYSTEM: your last reply was not a valid JSON envelope "
-                            f"({turn.error}). Reply again with ONLY the JSON object "
-                            "in the schema I gave you."
-                        ),
-                    }
+                nudge = (
+                    "SYSTEM: your last reply was not a valid JSON envelope "
+                    f"({turn.error}). Reply again with ONLY the JSON object "
+                    "in the schema I gave you."
                 )
+                if self._fail_streak >= 2:
+                    nudge += (
+                        ' Example shape: {"thought": "...", "action": {"tool": ' 
+                        '"write_file", "args": {"path": "index.html", '
+                        '"content": "<html>...</html>"}}} — all code goes INSIDE '
+                        'args.content, never outside the envelope.'
+                    )
+                self.history.append({"role": "user", "content": nudge})
                 if self._fail_streak >= 4:
                     self.ui.render_error(
                         "model keeps producing invalid output — turn paused. "
