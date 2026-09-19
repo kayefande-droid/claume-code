@@ -307,6 +307,37 @@ def _make_worker(agent: Agent, ui: UI, task_queue: "queue.Queue", box_state: dic
     return t
 
 
+def _sync_sibling_venv(sp) -> None:
+    """Keep dual installs in sync.
+
+    Windows installs often have two claume environments: the installer venv
+    (~/.claume/venv, what the PATH shim runs) and the user-site pip install.
+    When `claume update` upgrades one, upgrade the other too — otherwise the
+    shim keeps launching a stale version even after a successful update.
+    """
+    import sys as _sys
+
+    here = Path(_sys.executable).resolve()
+    venv_py = (Path.home() / ".claume" / "venv" / "Scripts" / "python.exe").resolve()
+    targets = []
+    if venv_py.is_file() and here != venv_py:
+        targets.append(("installer venv", [str(venv_py), "-m", "pip"]))
+    # When running INSIDE the venv, sync the system python instead.
+    if here == venv_py:
+        sys_py = Path(_sys.base_executable) / "python.exe"
+        if sys_py.is_file():
+            targets.append(("system python", [str(sys_py), "-m", "pip"]))
+    for label, base in targets:
+        try:
+            r = sp.run(base + ["install", "--quiet", "--force-reinstall", "--no-cache-dir",
+                               "git+https://github.com/kayefande-droid/claume-code.git"],
+                       stdout=sp.DEVNULL, stderr=sp.DEVNULL, stdin=sp.DEVNULL)
+            if r.returncode == 0:
+                print(f"{MINT}✔{RESET} {GREY}also updated {label}{RESET}")
+        except Exception:
+            pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -340,6 +371,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if r.returncode == 0:
                 src = f"{GREY} (git + pip){RESET}" if updated_repo else f"{GREY} (pip from git){RESET}"
                 print(f"{GREEN}✔ claume updated{RESET}{src} — restart the REPL to pick it up")
+                _sync_sibling_venv(_sp)
                 return 0
             print(f"{GOLD}⚠ pip update failed (exit {r.returncode}) — try: "
                   f"pip install --force-reinstall --no-cache-dir git+https://github.com/kayefande-droid/claume-code.git{RESET}")
