@@ -231,6 +231,13 @@ class Jarvis:
         low = text.lower()
         if any(t in low for t in self._SCREEN_TRIGGERS):
             return self._ask_with_screen(text)
+        # Music player intents — handled locally, no LLM round-trip needed
+        # (also works when the proxy is down: "jarvis play some music").
+        from . import music as musicmod
+
+        intent = musicmod.music_intent(text)
+        if intent:
+            return self._music_action(intent)
         self._set_state("thinking", text)
         self.history.append({"role": "user", "content": text})
         messages = [{"role": "system", "content": voice_system_prompt()}] + self.history[-10:]
@@ -246,6 +253,63 @@ class Jarvis:
                 _tts_speak(reply, str(config.Config().get("jarvis_voice_accent", "female-british")))
         self._set_state("idle", reply)
         return reply
+
+    def _music_action(self, intent: str) -> str:
+        """Run a music-player intent and shape a spoken reply."""
+        from . import music as musicmod
+
+        p = musicmod.get_player()
+        action = intent.split(" ", 1)[0]
+        rest = intent[len(action):].strip()
+        if action == "play":
+            if not p.status()["folder"]:
+                d = musicmod._default_folder()
+                if d:
+                    p.load_folder(d)
+            track = p.play_match(rest) if rest else p.play_index()
+            if track is None:
+                return "I could not find that track."
+            return f"Playing {musicmod._display_name(track)}."
+        if action == "pause":
+            p.pause()
+            return "Music paused."
+        if action == "resume":
+            p.resume()
+            return "Resuming."
+        if action == "stop":
+            p.stop()
+            return "Music stopped."
+        if action == "next":
+            t = p.next()
+            return f"Next track: {musicmod._display_name(t)}." if t else "End of playlist."
+        if action == "prev":
+            t = p.prev()
+            return f"Previous track: {musicmod._display_name(t)}." if t else "Start of playlist."
+        if action == "what":
+            s = p.status()
+            return f"Now playing {s['track']}." if s["track"] else "Nothing is playing."
+        if action == "shuffle":
+            on = p.toggle_shuffle()
+            return f"Shuffle {'on' if on else 'off'}."
+        if action == "shuffle-off":
+            if p.shuffle:
+                p.toggle_shuffle()
+            return "Shuffle off."
+        if action == "loop":
+            return f"Loop set to {p.cycle_loop()}."
+        if action == "volume":
+            try:
+                v = p.set_volume(int(rest))
+                return f"Volume {v} percent."
+            except ValueError:
+                return "Say a number after volume."
+        if action == "quiet":
+            v = p.set_volume(max(10, p.volume - 20))
+            return f"Volume {v} percent."
+        if action == "louder":
+            v = p.set_volume(min(100, p.volume + 20))
+            return f"Volume {v} percent."
+        return ""
 
     def _ask_with_screen(self, text: str) -> str:
         """Capture the screen and answer with vision (nvidia proxy / NIM)."""

@@ -41,6 +41,7 @@ HELP_LINES = [
     f"  {MINT}/queue{RESET}             explain the live task queue",
     f"  {MINT}/mascot{RESET}           show the claume pixel bot (eyes follow your mouse)",
     f"  {MINT}/voice{RESET} [on|off]   AI voice responses (British male/female accents)",
+    f"  {MINT}/music{RESET} [<folder>]  music player — play a folder while you code (/music open <dir>, play, pause, next, vol N)",
     f"  {MINT}/voice-accent{RESET} <a> male-british | female-british | male | female",
     f"  {MINT}/say{RESET} <text>       make claume speak text now",
     f"  {MINT}/hear{RESET}             one voice command (needs: pip install SpeechRecognition pyaudio)",
@@ -1747,6 +1748,99 @@ def cmd_mcp_preset(args: List[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# /music — terminal music player (play a folder while you code)
+# ---------------------------------------------------------------------------
+def cmd_music(args: List[str]) -> None:
+    """/music [<folder>|open|play|pause|next|prev|stop|vol N|shuffle|loop|list]"""
+    from . import music as musicmod
+    from .ui import BOLD, DIM, GREY, GREEN, GOLD, MINT, RESET
+
+    p = musicmod.get_player()
+    sub = args[0].lower() if args else ""
+    rest = " ".join(args[1:])
+
+    if not sub or sub in ("panel", "status"):
+        # no folder yet -> try the saved/default one
+        if not p.status()["folder"]:
+            d = musicmod._default_folder()
+            if d:
+                n = p.load_folder(d)
+                print(f"{GREY}  library: {d} ({n} tracks){RESET}")
+        musicmod.render_panel(print)
+        return
+    if sub in ("open", "folder", "load"):
+        folder = Path(rest).expanduser() if rest else musicmod._default_folder()
+        if not folder or not Path(folder).is_dir():
+            print(f"{GOLD}⚠ folder not found: {rest or '(no saved folder)'}{RESET}")
+            print(f"{GREY}  usage: /music open <folder>{RESET}")
+            return
+        n = p.load_folder(Path(folder))
+        try:
+            from . import config as _cfg
+            _cfg.Config().set("music_folder", str(folder))
+        except Exception:
+            pass
+        print(f"{GREEN}✔ library loaded{RESET} {GREY}— {folder} ({n} tracks){RESET}")
+        musicmod.render_panel(print)
+        return
+    if sub == "play":
+        if not p.status()["folder"]:
+            d = musicmod._default_folder()
+            if d:
+                p.load_folder(d)
+        track = p.play_match(rest) if rest else p.play_index()
+        if track is None:
+            print(f"{GOLD}⚠ nothing to play{RESET} {GREY}— /music open <folder> first{RESET}")
+            return
+        print(f"{GREEN}♪ {musicmod._display_name(track)}{RESET}")
+        musicmod.render_panel(print)
+        return
+    if sub in ("pause", "resume"):
+        (p.pause if sub == "pause" else p.resume)()
+        musicmod.render_panel(print)
+        return
+    if sub == "toggle":
+        state = p.toggle()
+        print(f"{GREY}{state}{RESET}")
+        musicmod.render_panel(print)
+        return
+    if sub == "next":
+        t = p.next()
+        print(f"{GREEN}♪ {musicmod._display_name(t)}{RESET}" if t else f"{GOLD}⚠ end of playlist{RESET}")
+        return
+    if sub == "prev":
+        t = p.prev()
+        print(f"{GREEN}♪ {musicmod._display_name(t)}{RESET}" if t else f"{GOLD}⚠ start of playlist{RESET}")
+        return
+    if sub == "stop":
+        p.stop()
+        print(f"{GREY}■ stopped{RESET}")
+        return
+    if sub in ("vol", "volume"):
+        try:
+            v = p.set_volume(int(rest))
+            print(f"{GREEN}✔ volume {v}%{RESET}")
+        except ValueError:
+            print(f"{GOLD}⚠ usage: /music vol 40{RESET}")
+        return
+    if sub == "shuffle":
+        print(f"{GREEN}✔ shuffle {'on' if p.toggle_shuffle() else 'off'}{RESET}")
+        return
+    if sub == "loop":
+        print(f"{GREEN}✔ loop: {p.cycle_loop()}{RESET}")
+        return
+    if sub == "list":
+        musicmod.render_playlist(print)
+        return
+    print(f"{GOLD}⚠ unknown /music subcommand '{sub}'{RESET}")
+    print(f"{GREY}  /music                     show the player panel{RESET}")
+    print(f"{GREY}  /music open <folder>       load a music folder{RESET}")
+    print(f"{GREY}  /music play [name]         play (or fuzzy-find a track){RESET}")
+    print(f"{GREY}  /music pause|resume|next|prev|stop{RESET}")
+    print(f"{GREY}  /music vol 40 · shuffle · loop · list{RESET}")
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
@@ -1812,6 +1906,8 @@ def handle_command(line: str, agent: "Agent", enqueue=None) -> bool:
         _frame.status_bar("worki · claume-code", out=print)
         print()
         _frame.skills_panel(out=print)
+    elif name == "music":
+        cmd_music(args)
     elif name == "voice":
         cmd_voice(args, agent.ui)
     elif name == "voice-accent":
