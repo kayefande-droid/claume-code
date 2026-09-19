@@ -175,7 +175,16 @@ def stream_chat(
         )
         try:
             resp = urllib.request.urlopen(req, timeout=300, context=_SSL_CTX)
-            return _consume_response(resp, payload, on_token)
+            text = _consume_response(resp, payload, on_token)
+            if not text and len(model_chain) > 1:
+                # Reasoning models can burn the whole token budget inside
+                # reasoning_content and emit zero visible text — fall
+                # through to the next model instead of returning nothing.
+                last_error = LLMError(
+                    f"model {attempt_model} returned an empty response — trying next in chain"
+                )
+                continue
+            return text
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")
             err = LLMError(_friendly_http_error(exc.code, detail))
@@ -191,7 +200,9 @@ def stream_chat(
             raise LLMError(
                 f"cannot reach LLM endpoint {endpoint} — is the free-claume proxy running? ({exc})"
             ) from exc
-    raise last_error or LLMError("all models in the fallback chain failed")
+    if last_error is not None:
+        raise last_error
+    raise LLMError("model returned an empty response — try /model or /effort deep")
 
 
 def _consume_response(resp: Any, payload: Dict[str, Any], on_token: Optional[Any]) -> str:

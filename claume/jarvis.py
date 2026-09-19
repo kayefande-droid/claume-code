@@ -32,7 +32,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from . import config, llm
+from . import config, llm, proxy
 from .version import __version__
 
 # ---------------------------------------------------------------------------
@@ -182,6 +182,27 @@ def tts_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
+def _ensure_jarvis_proxy() -> None:
+    """Make sure the free-claume proxy is live before jarvis starts.
+
+    Jarvis talks ONLY to NVIDIA NIM through the local proxy, so the desktop
+    app (`claume jarvis` / `python -m claume.jarvis_app`) calls this at boot:
+    if a healthy proxy is already running it is reused; otherwise one is
+    started in the background so the bot comes on without the user first
+    running `claume proxy` in another terminal.
+    """
+    if proxy.is_running():
+        return
+    try:
+        proxy.ensure_keys()
+    except Exception:
+        pass  # no key yet — jarvis still boots; first ask() will surface it
+    try:
+        proxy.start_server()
+    except Exception:
+        pass  # port occupied by a non-claume process etc. — degrade gracefully
+
+
 # The brain — one shared LLM conversation through claume's provider
 # ---------------------------------------------------------------------------
 class Jarvis:

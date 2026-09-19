@@ -28,7 +28,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import config, llm, parser, prompts, security
 from .tools import registry
-
 ConfirmFn = Callable[[str, str], bool]  # (title, detail) -> bool
 
 READ_ONLY_TOOLS = {
@@ -189,6 +188,50 @@ class Agent:
     # ------------------------------------------------------------------
     # One full user turn (multi-step ReAct with auto-continue)
     # ------------------------------------------------------------------
+    def _salvage_html_reply(self, reply: str) -> Optional[str]:
+        """Recover a complete HTML document streamed as plain prose.
+
+        Finds the first ``<!DOCTYPE html>`` (or ``<html>``) through the
+        closing ``</html>``, writes it to the workspace under a sensible
+        name and returns a short confirmation (or None when no document
+        is present).
+        """
+        import re as _re
+        low = reply.lower()
+        starts = [i for pat in ("<!doctype html", "<html") for i in (low.find(pat),) if i != -1]
+        if not starts:
+            return None
+        start = min(starts)
+        end = low.rfind("</html>")
+        if end != -1 and end > start:
+            doc = reply[start:end + len("</html>")]
+        else:
+            # Stream truncated mid-document (token budget ran out) — browsers
+            # auto-close missing tags, so salvage what arrived and close it.
+            doc = reply[start:]
+            if not doc.rstrip().lower().endswith("</body></html>"):
+                doc = doc.rstrip() + "\n</body>\n</html>\n"
+        if len(doc) < 400:  # too small to be a real page — likely a snippet
+            return None
+        name_m = _re.search(r"(?:index|homepage)\s*\.\s*html|([\w-]{1,32})\s*\.\s*html", reply[:start].lower())
+        fname = "index.html"
+        if name_m and name_m.group(1):
+            fname = f"{name_m.group(1)}.html"
+        try:
+            (self.workspace / fname).write_text(doc, encoding="utf-8")
+        except Exception:
+            return None
+        msg = (
+            f"The model streamed the page as plain text instead of using the "
+            f"JSON envelope — I recovered it and saved {len(doc)} bytes to "
+            f"{fname}."
+        )
+        try:
+            self.ui.render_warning(msg)
+        except Exception:
+            pass
+        return msg
+
     def run_turn(self, user_text: str, attachments: Optional[List[dict]] = None) -> str:
         """One full user turn.
 
@@ -222,6 +265,7 @@ class Agent:
         final_text = ""
         self._tool_calls = 0
         self._continues_used = 0
+        self._did_write = False  # any successful file write this turn
         self._last_action_key = ""
         self._last_action_error_count = 0
         # NOTE: budgets are applied in __init__ / on_effort_changed — not
@@ -287,8 +331,24 @@ class Agent:
                     on_token=lambda t: self._on_token(t, ui_buffer),
                 )
             except llm.LLMError as exc:
-                self.ui.render_error(str(exc))
-                return "(LLM error — turn aborted)"
+                # Transient connection failures (proxy restart, upstream
+                # timeout) should not kill the whole turn — retry once on
+                # connection-level errors before giving up.
+                if "cannot reach LLM endpoint" in str(exc):
+                    self.ui.render_warning("connection hiccup — retrying once…")
+                    time.sleep(2)
+                    try:
+                        ui_buffer = []
+                        reply = llm.stream_chat(
+                            messages,
+                            on_token=lambda t: self._on_token(t, ui_buffer),
+                        )
+                    except llm.LLMError as exc2:
+                        self.ui.render_error(str(exc2))
+                        return "(LLM error — turn aborted)"
+                else:
+                    self.ui.render_error(str(exc))
+                    return "(LLM error — turn aborted)"
             except KeyboardInterrupt:
                 # ctrl+c mid-stream: stop this turn cleanly, keep history.
                 self._flush_stream_buffer(ui_buffer)
@@ -314,6 +374,22 @@ class Agent:
                     h in reply for h in ('"tool"', '"action"', '"final"', '"thought"')
                 )
                 if not has_envelope_hints and reply.strip():
+                    # Full-page drift recovery: when the model streams a
+                    # complete HTML document as prose (common right after a
+                    # big design-report injection), save it into the
+                    # workspace instead of just printing it — the user asked
+                    # for a build, not a lecture.
+                    saved = self._salvage_html_reply(reply)
+                    if saved:
+                        self._fail_streak = 0
+                        self.history.append({"role": "assistant", "content": reply[:4000]})
+                        self.history.append({"role": "user", "content": (
+                            "SYSTEM: your page was saved from plain output. "
+                            "Future file writes MUST use the write_file action "
+                            'inside the JSON envelope.'
+                        )})
+                        final_text = saved
+                        break
                     self._fail_streak = 0
                     self.history.append({"role": "assistant", "content": reply[:4000]})
                     self.ui.render_warning(
@@ -338,10 +414,19 @@ class Agent:
                     )
                 self.history.append({"role": "user", "content": nudge})
                 if self._fail_streak >= 4:
-                    self.ui.render_error(
-                        "model keeps producing invalid output — turn paused. "
-                        "Try /effort deep or /model."
-                    )
+                    if self._did_write:
+                        # The work already landed in the workspace — treat the
+                        # envelope noise after it as chatter, not failure.
+                        self.ui.render_warning(
+                            "build artifacts are saved; the model rambled after "
+                            "the write, so the turn ended early"
+                        )
+                        final_text = final_text or "done — artifacts saved to the workspace"
+                    else:
+                        self.ui.render_error(
+                            "model keeps producing invalid output — turn paused. "
+                            "Try /effort deep or /model."
+                        )
                     break
                 continue
 
@@ -374,6 +459,10 @@ class Agent:
                 else:
                     self._tool_calls += 1
                     result, is_err = self._execute_with_confirm(turn.action)
+                    if not is_err and turn.action.tool in (
+                        "write_file", "create_file", "edit_file", "write", "save_file"
+                    ):
+                        self._did_write = True
 
                 self.ui.render_action(turn.action.tool, turn.action.args, result, is_err)
 

@@ -100,7 +100,7 @@ class JarvisApp:
 
         # Always-listening toggle (record me mode) — button flows through
         # Jarvis.set_recording + Jarvis.set_gesture so the brain sees the cue.
-        self.root.bind("<keys>", self._on_hotkey)
+        self.root.bind("<Key>", self._on_hotkey)
 
     # -- layout -------------------------------------------------------------
     def _center(self, w: int, h: int) -> None:
