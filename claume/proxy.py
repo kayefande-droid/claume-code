@@ -191,6 +191,7 @@ def _list_models(api_key: str) -> List[Dict[str, Any]]:
 # Key + model health probing (admin UI support)
 # ---------------------------------------------------------------------------
 _probe_cache: Dict[str, Any] = {"at": 0.0, "data": {}}
+_models_filter_cache: Dict[str, Dict[str, Any]] = {}
 
 
 def probe_chat_model(api_key: str, model: str, timeout: float = 30.0) -> Tuple[bool, str]:
@@ -315,18 +316,40 @@ def _filter_chat_models(models: List[Dict[str, Any]], api_key: str, sample: int 
         keep.append(m)
     if len(keep) <= sample:
         return keep
-    # Probe a rotating sample (cache position advances each call).
+    # Probe a rotating sample — in parallel and cached, so /v1/models stays
+    # fast (agent + jarvis hit this at boot). Serial probing of 60 models
+    # x 12s made the endpoint hang for minutes; a thread pool + a 10-min
+    # cache keeps it under a few seconds on warm calls.
     import random
+    import hashlib
+    from concurrent.futures import ThreadPoolExecutor
 
-    sample_models = random.sample(keep, sample)
-    verified_ids = {
-        mid
-        for mid, ok, _ in (
-            (str(m.get("id", "")), *probe_chat_model(api_key, str(m.get("id", "")), timeout=12))
-            for m in sample_models
-        )
-        if ok
-    }
+    cache_key = hashlib.sha1(api_key.encode()).hexdigest()[:12]
+    now = time.time()
+    cached = _models_filter_cache.get(cache_key)
+    if cached and now - cached["at"] < 600.0:
+        verified_ids = cached["verified"]
+    else:
+        sample_models = random.sample(keep, sample)
+        verified_ids: set = set()
+
+        def _probe(mid: str) -> Tuple[str, bool, str]:
+            ok, detail = probe_chat_model(api_key, mid, timeout=8.0)
+            return mid, ok, detail
+
+        budget = time.monotonic() + 20.0  # hard wall-clock budget
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            futures = [pool.submit(_probe, str(m.get("id", ""))) for m in sample_models]
+            for fut in futures:
+                if time.monotonic() > budget:
+                    break  # keep whatever verified so far
+                try:
+                    mid, ok, _ = fut.result(timeout=max(0.1, budget - time.monotonic()))
+                except Exception:
+                    continue
+                if ok:
+                    verified_ids.add(mid)
+        _models_filter_cache[cache_key] = {"at": now, "verified": verified_ids}
     # Always keep the default pool + anything verified live.
     out = [m for m in keep if str(m.get("id", "")) in verified_ids or str(m.get("id", "")) in DEFAULT_MODEL_POOL]
     return out or keep[:40]
